@@ -1,0 +1,47 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**.py'
+      - 'admin.html'
+      - 'extension/**'
+      - 'version.json'
+      - 'requirements.txt'
+      - 'muse2api.spec'
+      - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller==6.22.0
+      - name: Build standalone executable
+        run: python -m PyInstaller --clean --noconfirm muse2api.spec
+      - name: Smoke test executable
+        shell: pwsh
+        run: |
+          $env:MUSE2API_HOME = Join-Path $env:RUNNER_TEMP 'muse2api-smoke'
+          $env:MUSE2API_PROFILE_ROOT = Join-Path $env:RUNNER_TEMP 'muse2api-profiles'
+          $env:MUSE2API_KEY = 'build-smoke-test'
+          $process = Start-Process dist/muse2api.exe -ArgumentList '--smoke-test' -PassThru -NoNewWindow
+          if (-not $process.WaitForExit(120000)) {
+            $process.Kill()
+            throw 'Executable smoke test timed out'
+          }
+          if ($process.ExitCode -ne 0) { throw "Smoke test exited $($process.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muse2api-windows-x64
+          path: dist/muse2api.exe
+          if-no-files-found: error
