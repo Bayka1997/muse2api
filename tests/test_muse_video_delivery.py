@@ -10,6 +10,11 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import types
+fake_cdp = types.ModuleType("cdp")
+fake_cdp.CDP = object
+fake_cdp.http_json = lambda *args, **kwargs: {}
+sys.modules["cdp"] = fake_cdp
 spec = importlib.util.spec_from_file_location("muse_engine_candidate", ROOT / "engine.py")
 engine_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(engine_module)
@@ -43,5 +48,35 @@ with tempfile.TemporaryDirectory() as profile:
         assert clock[0] < 32, clock[0]
     else:
         raise AssertionError("undelivered video request waited for the full timeout")
+
+clock[0] = 0.0
+engine.page = SimpleNamespace(js=lambda _: json.dumps({
+    "cnt": 1, "txt": "Noted. Leaving this here while the shot is prepared.",
+    "stop": False, "tail": ""}))
+engine._scroll_bottom = lambda: None
+engine.attachments = lambda: (
+    [{"src": "scene.mp4", "vSrc": "scene.mp4", "tid": "video", "hasVideo": True, "w": 32, "h": 32}]
+    if clock[0] >= 20 else [])
+kept = engine._wait_attachment("", 60, "video", base_agent_cnt=0, base_att_cnt=0)
+assert kept["vSrc"] == "scene.mp4", kept
+assert clock[0] >= 20, clock[0]
+
+clock[0] = 0.0
+engine.page = SimpleNamespace(js=lambda _: json.dumps({
+    "cnt": 1, "txt": "I cannot create that video because it violates the content policy.",
+    "stop": False, "tail": ""}))
+engine.attachments = lambda: []
+missed = engine._wait_attachment("", 60, "video", base_agent_cnt=0, base_att_cnt=0)
+assert missed is None
+assert clock[0] >= 60, clock[0]
+
+clock[0] = 0.0
+try:
+    engine._wait_attachment("", 60, "image", base_agent_cnt=0, base_att_cnt=0)
+except engine_module.MuseGenerationError as exc:
+    assert "仅返回文本" in str(exc)
+    assert clock[0] < 20, clock[0]
+else:
+    raise AssertionError("a finished image text refusal should still fail fast")
 
 print("PASS: composer readiness and undelivered video fast-fail")

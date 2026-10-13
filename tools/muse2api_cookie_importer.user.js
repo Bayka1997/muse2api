@@ -23,12 +23,18 @@
   const ESSENTIAL = ['hatch_sess', 'hatch_gw', 'hatch_vml'];
 
   function loadCfg() {
-    const fallback = { base: '', key: '', label: '' };
+    const fallback = {
+      base: 'http://localhost:18610',
+      key: 'm2a_REPLACE_WITH_YOUR_SECURE_RANDOM_KEY',
+      label: 'muse-main',
+    };
     if (typeof GM_getValue === 'function') {
-      return GM_getValue(STORE_KEY, fallback);
+      const saved = GM_getValue(STORE_KEY, fallback) || {};
+      return Object.fromEntries(Object.entries(fallback).map(([name, value]) => [name, saved[name] || value]));
     }
     try {
-      return JSON.parse(localStorage.getItem(STORE_KEY)) || fallback;
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY)) || {};
+      return Object.fromEntries(Object.entries(fallback).map(([name, value]) => [name, saved[name] || value]));
     } catch (_) {
       return fallback;
     }

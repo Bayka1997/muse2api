@@ -101,7 +101,7 @@ async def check(source, home):
     if locked_impl:
         def assert_owned(*args, **kwargs):
             assert module.GEN_LOCK.locked(), "browser lock must cover retry/cleanup"
-            assert kwargs.get("deadline") is not None
+            assert kwargs.get("deadline") is None
             return {"fixture": True}, None
         module._run_generation_locked = assert_owned
         module._run_generation("lock fixture", "image", 1)

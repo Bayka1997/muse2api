@@ -45,7 +45,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from pydantic import BaseModel, Field
 
 from config import CFG
-from engine import ESSENTIAL_COOKIES, MuseAuthError, MuseEngine, MuseGenerationError
+from engine import ESSENTIAL_COOKIES, MuseAuthError, MuseEngine, MuseGenerationError, file_is_page_clip
 from store import Store, account_expiry, min_expiry
 
 import sys
@@ -121,44 +121,69 @@ class ConcurrencyLock:
 
 
 class AccountPoolManager:
-    """账号并发冲突管理器：确保同一账号不会同时被两个并发任务操作，多账号则并行执行。"""
-    def __init__(self, store_instance):
+    """Mỗi tài khoản có một hạn mức riêng. Tài khoản này đầy slot không chặn tài khoản khác."""
+    def __init__(self, store_instance, per_account: int = 10):
         self.store = store_instance
-        self.busy_accounts: set[str] = set()
+        self.per_account = max(1, per_account)
+        self.busy_counts: dict[str, int] = {}
         self.cond = threading.Condition()
+
+    @property
+    def busy_accounts(self) -> set[str]:
+        return {aid for aid, count in self.busy_counts.items() if count > 0}
+
+    def _slots(self, account_id: str) -> int:
+        return self.busy_counts.get(account_id, 0)
+
+    def _live(self) -> list[dict]:
+        return [a for a in self.store.accounts if a.get("enabled", True) and a.get("cookies")]
+
+    def _take(self, account_id: str):
+        self.busy_counts[account_id] = self._slots(account_id) + 1
+
+    def _choose(self, preferred_id: str | None, force_rotate: bool) -> str | None:
+        live = self._live()
+        open_accounts = [a for a in live if self._slots(a["id"]) < self.per_account]
+        if not open_accounts:
+            return None
+        if force_rotate and preferred_id and any(a["id"] != preferred_id for a in open_accounts):
+            open_accounts = [a for a in open_accounts if a["id"] != preferred_id]
+        open_accounts.sort(key=lambda a: (self._slots(a["id"]), a.get("last_used") or 0, a["id"]))
+        return open_accounts[0]["id"]
 
     def acquire(self, account_id: str | None = None, preferred_id: str | None = None,
                 rotate: bool = True, force_rotate: bool = False,
                 timeout: float = 60.0, record_use: bool = True) -> dict:
+        del rotate  # Việc chia đều dựa trên số video đang chạy, không dồn vào một cookie.
         deadline = time.monotonic() + timeout
         with self.cond:
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise MuseGenerationError("等待空闲账号超时，当前所有账号均处于繁忙中")
+                    live = self._live()
+                    full = sum(1 for a in live if self._slots(a["id"]) >= self.per_account)
+                    raise MuseGenerationError(
+                        f"Hết thời gian chờ: {full}/{len(live)} tài khoản đang chạy đủ {self.per_account} video.")
 
                 if account_id:
                     acc = self.store.get_account(account_id)
                     if not acc or not acc.get("enabled", True):
                         raise MuseAuthError(f"指定账号 {account_id} 不存在或已禁用")
-                    if account_id not in self.busy_accounts:
-                        self.busy_accounts.add(account_id)
+                    if self._slots(account_id) < self.per_account:
+                        self._take(account_id)
                         return acc
                 else:
-                    pref = preferred_id if preferred_id not in self.busy_accounts else None
-                    acc = self.store.pick_account(
-                        preferred_id=pref,
-                        rotate=rotate,
-                        force_rotate=force_rotate,
-                        exclude_ids=self.busy_accounts,
-                        record_use=record_use,
-                    )
-                    if acc:
-                        self.busy_accounts.add(acc["id"])
-                        return acc
+                    chosen = self._choose(preferred_id, force_rotate)
+                    if chosen:
+                        acc = self.store.pick_account(
+                            preferred_id=chosen, rotate=False, force_rotate=False, record_use=record_use)
+                        if not acc or acc["id"] != chosen:
+                            acc = self.store.get_account(chosen)
+                        if acc and self._slots(acc["id"]) < self.per_account:
+                            self._take(acc["id"])
+                            return acc
 
-                live = [a for a in self.store.accounts if a.get("enabled", True) and a.get("cookies")]
-                if not live:
+                if not self._live():
                     raise MuseAuthError("没有可用账号，请先在管理页面导入 cookie")
 
                 self.cond.wait(timeout=min(remaining, 0.5))
@@ -167,12 +192,16 @@ class AccountPoolManager:
         if not account_id:
             return
         with self.cond:
-            self.busy_accounts.discard(account_id)
+            count = self.busy_counts.get(account_id, 0)
+            if count <= 1:
+                self.busy_counts.pop(account_id, None)
+            else:
+                self.busy_counts[account_id] = count - 1
             self.cond.notify_all()
 
 
-GEN_LOCK = ConcurrencyLock(limit=CFG.max_concurrency)
-ACCOUNT_POOL = AccountPoolManager(store)
+GEN_LOCK = ConcurrencyLock(limit=max(CFG.max_concurrency, CFG.per_account_concurrency * 8))
+ACCOUNT_POOL = AccountPoolManager(store, per_account=CFG.per_account_concurrency)
 IMAGE_TASK_LOCK = threading.Lock()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -420,6 +449,7 @@ class ImageRequest(BaseModel):
     image: Any = None
     images: list | None = None
     reference_image: str | None = None
+    account_id: str | None = None
     async_: bool = Field(False, alias="async")
 
 
@@ -435,6 +465,7 @@ class VideoRequest(BaseModel):
     image: Any = None
     image_url: Any = None
     reference_image: str | None = None
+    account_id: str | None = None
 
 
 class ChatMessage(BaseModel):
@@ -494,33 +525,33 @@ class AccountPatch(BaseModel):
 def build_image_prompt(r: ImageRequest) -> str:
     has_ref = bool(r.reference_image or r.image or r.images)
     if has_ref:
-        parts = [f"基于我本次上传附带的参考图片进行生图/编辑：{r.prompt.strip()}"]
+        parts = [f"Generate or edit an image using only the reference image uploaded with this request: {r.prompt.strip()}"]
     else:
-        parts = [f"全新文生图创作（当前未提供任何参考图，请勿查找历史相册或向用户索要原图，直接根据文字描述从零绘制生成一张全新图片）：{r.prompt.strip()}"]
+        parts = [f"Create a new image from text only. No reference image is provided; do not search previous albums or ask for an original image. Generate a new image from scratch based on this description: {r.prompt.strip()}"]
     ar = (r.aspect_ratio or "").strip().lower()
     sz = (r.size or "").strip().lower()
 
     if any(k in ar or k in sz for k in ("9:16", "9/16", "portrait", "竖屏", "720x1280", "1080x1920")):
-        parts.append("【画面构图与比例要求】：严格 9:16 竖屏满屏画幅（9:16 vertical portrait aspect ratio，高大于宽的手机全屏竖版画面），绝对不要生成横屏，保持垂直构图")
+        parts.append("Composition and aspect ratio: strictly 9:16 vertical portrait, full-screen phone framing with height greater than width. Keep the composition vertical; do not generate a landscape image.")
     elif any(k in ar or k in sz for k in ("16:9", "16/9", "landscape", "横屏", "1280x720", "1920x1080")):
-        parts.append("【画面构图与比例要求】：16:9 宽屏横屏画幅（16:9 widescreen landscape aspect ratio）")
+        parts.append("Composition and aspect ratio: 16:9 widescreen landscape.")
     elif any(k in ar or k in sz for k in ("1:1", "square", "正方形", "1024x1024")):
-        parts.append("【画面构图与比例要求】：1:1 正方形画幅（1:1 square aspect ratio）")
+        parts.append("Composition and aspect ratio: 1:1 square.")
     elif any(k in ar or k in sz for k in ("4:3", "4/3")):
-        parts.append("【画面构图与比例要求】：4:3 比例画幅")
+        parts.append("Composition and aspect ratio: 4:3.")
     elif any(k in ar or k in sz for k in ("3:4", "3/4")):
-        parts.append("【画面构图与比例要求】：3:4 竖向画幅")
+        parts.append("Composition and aspect ratio: 3:4 portrait.")
     elif r.aspect_ratio:
-        parts.append(f"【画面构图与比例要求】：{r.aspect_ratio} 画面比例")
+        parts.append(f"Composition and aspect ratio: {r.aspect_ratio}.")
     elif r.size:
-        parts.append(f"尺寸/比例：{r.size}")
+        parts.append(f"Size/aspect ratio: {r.size}.")
 
     if has_ref:
-        parts.append("【纯净画面要求】：彻底清除并去除参考图中的所有文字、水印、签名、角标及Logo标记（clean image without any watermark, text, or logo），输出绝对纯净无字画面")
+        parts.append("Clean image requirement: remove all text, watermarks, signatures, corner marks, and logos from the reference image. Output a clean image without text, watermarks, or logos.")
 
     if r.extra:
         parts.append(r.extra)
-    return "，".join(parts)
+    return "\n".join(parts)
 
 
 def _content_text(content) -> str:
@@ -729,25 +760,25 @@ def build_video_prompt(r: VideoRequest) -> str:
     parts = []
     if is_vertical:
         if has_ref:
-            parts.append(f"基于我本次上传的参考图片附件作为第一帧参考图（严禁使用历史图片或任何其他图像，必须严格以我当前刚刚上传并附带在此处的这张图片为起始帧）：生成一个严格9:16竖屏手机满屏的动态图生视频（9:16 vertical portrait video，720x1280，高大于宽的手机全屏竖版画面，严格以附带的参考图为起始第一帧延续动作，严禁生成横屏或黑边，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate a strictly 9:16 vertical portrait image-to-video animation, 720x1280, full-screen phone framing with height greater than width. Start from the attached reference image and continue its action. Do not generate landscape framing or black borders. Duration: exactly {dur} seconds. Description: {user_prompt}")
         else:
-            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个严格9:16竖屏手机满屏视频（9:16 vertical portrait video，720x1280，高大于宽的手机全屏竖版画面，严禁生成横屏或带有左右黑边，保持垂直构图，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a strictly 9:16 vertical portrait video, 720x1280, full-screen phone framing with height greater than width. Keep the composition vertical; do not generate landscape framing or black borders. Duration: exactly {dur} seconds. Description: {user_prompt}")
     elif any(k in ar or k in sz for k in ("16:9", "16/9", "landscape", "横屏", "1280x720", "1920x1080")):
         if has_ref:
-            parts.append(f"基于我本次上传的参考图片附件作为第一帧参考图（严禁使用历史图片或任何其他图像，必须严格以我当前刚刚上传并附带在此处的这张图片为起始帧）：生成一个16:9宽屏横屏图生视频（16:9 widescreen landscape video，严格以附带的参考图为起始第一帧延续动作，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate a 16:9 widescreen landscape image-to-video animation. Start from the attached reference image and continue its action. Duration: exactly {dur} seconds. Description: {user_prompt}")
         else:
-            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个16:9横屏宽屏视频（16:9 widescreen landscape video，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a 16:9 widescreen landscape video. Duration: exactly {dur} seconds. Description: {user_prompt}")
     else:
         if has_ref:
-            parts.append(f"基于我本次上传的参考图片附件作为第一帧参考图（严禁使用历史图片或任何其他图像，必须严格以我当前刚刚上传并附带在此处的这张图片为起始帧）：生成动态图生视频（严格以附带的参考图为起始第一帧延续动作，时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate an image-to-video animation. Start from the attached reference image and continue its action. Duration: exactly {dur} seconds. Description: {user_prompt}")
         else:
-            parts.append(f"全新文生视频创作（纯文本全新生成，严禁参考任何历史图片或上下文）：生成一个视频（时长严格为 {dur} 秒）：{user_prompt}")
+            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a video. Duration: exactly {dur} seconds. Description: {user_prompt}")
 
     if r.resolution:
-        parts.append(f"画质规格：{r.resolution}")
+        parts.append(f"Resolution/quality: {r.resolution}.")
     if r.extra:
         parts.append(r.extra)
-    return "，".join(parts)
+    return "\n".join(parts)
 
 
 def media_url(name: str) -> str:
@@ -852,9 +883,9 @@ def _pos(v) -> bool:
 def _run_generation(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
                     reference_image: str | None = None,
-                    on_acquired=None) -> tuple[dict, str | None]:
+                    on_acquired=None, on_context=None, task_id=None) -> tuple[dict, str | None]:
     # Browser ownership covers account selection, retry and cleanup, not just generate().
-    deadline = time.monotonic() + max(1, timeout)
+    # The generation clock starts after an account is free. Queue time must not consume it.
     if not GEN_LOCK.acquire(timeout=max(1, timeout)):
         raise MuseGenerationError("等待浏览器队列超时，请稍后重试")
     try:
@@ -864,29 +895,30 @@ def _run_generation(prompt: str, kind: str, timeout: int,
             except Exception:
                 pass
         return _run_generation_locked(prompt, kind, timeout, account_id,
-                                      on_progress, reference_image, deadline=deadline)
+                                      on_progress, reference_image, deadline=None,
+                                      on_context=on_context, task_id=task_id)
     finally:
+        if task_id:
+            views = getattr(engine, "task_views", None)
+            if views:
+                views.finish(task_id)
+            if getattr(engine, "_local", None):
+                engine._local.task_view_id = None
         GEN_LOCK.release()
 
 
 def _run_generation_locked(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
-                    reference_image: str | None = None, deadline=None) -> tuple[dict, str | None]:
-    remaining_wait = int(deadline - time.monotonic()) if deadline is not None else timeout
-    preferred_id = getattr(engine, "current_acc_id", None)
-    if kind == "video" and not account_id:
-        # Prefer the last account that completed a video; session health alone is insufficient.
-        recent = sorted(list(store.tasks.values()), key=lambda task: task.get("created_at", 0), reverse=True)
-        for task in recent:
-            if task.get("kind") != "video" or task.get("status") != "completed" or not task.get("account"):
-                continue
-            candidate = store.get_account(task["account"])
-            if candidate and candidate.get("enabled", True) and candidate.get("ok") is not False:
-                preferred_id = candidate["id"]
-                break
+                    reference_image: str | None = None, deadline=None, on_context=None, task_id=None) -> tuple[dict, str | None]:
+    # Several batch rows can wait behind the few signed-in accounts. Give them
+    # time for a few finished videos before failing, then give the winner a full generation budget.
+    account_wait = max(1, timeout) * 4 if deadline is None else max(1, int(deadline - time.monotonic()))
+    preferred_id = None if kind == "video" and not account_id else getattr(engine, "current_acc_id", None)
     acc = ACCOUNT_POOL.acquire(account_id=account_id,
                                preferred_id=preferred_id,
-                               timeout=max(1, remaining_wait))
+                               timeout=account_wait)
+    if deadline is None:
+        deadline = time.monotonic() + max(1, timeout)
     cur_acc = acc
     last_exc = None
     try:
@@ -918,10 +950,36 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 remaining = int(deadline - time.monotonic()) if deadline is not None else timeout
                 if remaining <= 0:
                     raise MuseGenerationError("任务总等待时限已到，停止重试")
-                res = engine.generate(cur_acc["cookies"], prompt, expect=kind,
-                                      timeout=remaining, expires=cur_acc.get("cookies_exp"),
-                                      account_id=cur_acc["id"], on_progress=on_progress,
-                                      reference_image=reference_image)
+                # A later attempt must not replace the account that already owns a thread
+                # until that new attempt has submitted its own conversation.
+                if on_context and attempt == 0:
+                    on_context({"account": cur_acc["id"], "account_label": cur_acc.get("label", cur_acc["id"])})
+                def record_context():
+                    if not on_context:
+                        return
+                    try:
+                        context = dict(engine.generation_context() or {})
+                    except Exception:  # noqa: BLE001
+                        return
+                    if not context.get("muse_url"):
+                        return
+                    context["account"] = cur_acc["id"]
+                    context["account_label"] = cur_acc.get("label", cur_acc["id"])
+                    on_context(context)
+                def report_progress(progress):
+                    record_context()
+                    if on_progress:
+                        on_progress(progress)
+                if task_id:
+                    engine._ensure_local().task_view_id = task_id
+                try:
+                    res = engine.generate(cur_acc["cookies"], prompt, expect=kind,
+                                          timeout=remaining, expires=cur_acc.get("cookies_exp"),
+                                          account_id=cur_acc["id"], on_progress=report_progress,
+                                          reference_image=reference_image)
+                finally:
+                    # Save the conversation link before failure cleanup navigates away or closes the tab.
+                    record_context()
                 store.mark(cur_acc["id"], True, "")
                 _sync_cookies(cur_acc["id"])
                 return res, cur_acc["id"]
@@ -933,7 +991,10 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 last_exc = exc
                 store.mark(cur_acc["id"], True, f"任务异常: {str(exc)[:60]}")
                 try:
-                    engine.reset_thread()
+                    if task_id:
+                        engine.close_current_page()
+                    else:
+                        engine.reset_thread()
                 except Exception:
                     pass
             except Exception as exc:  # noqa: BLE001
@@ -1000,7 +1061,7 @@ def _queue_image(req: ImageRequest, prompt: str, reference_image: str | None,
                         "created_at": existing["created_at"]})
         # ponytail: one Chromium worker; cap admission instead of adding a broker.
         if sum(t.get("kind") == "image" and t.get("status") in ("queued", "processing")
-               for t in tasks) >= 8:
+               for t in tasks) >= 30:
             raise HTTPException(429, "Image queue is full; retry later")
         task = store.create_task("image", req.prompt)
         tid = task["id"]
@@ -1016,9 +1077,11 @@ def _queue_image(req: ImageRequest, prompt: str, reference_image: str | None,
         try:
             res, acc_id = _run_generation(
                 prompt, "image", req.timeout or CFG.image_timeout,
+                account_id=req.account_id or None,
                 reference_image=reference_image,
                 on_progress=lambda p: store.update_task(tid, progress=p),
-                on_acquired=_on_acquired)
+                on_acquired=_on_acquired,
+                on_context=lambda context: store.update_task(tid, **context), task_id=tid)
             # Store only media metadata, not large base64 payloads or reference credentials.
             store.update_task(tid, status="completed", progress=100, account=acc_id,
                               elapsed=round(time.time() - timing["t0"], 1),
@@ -1140,7 +1203,7 @@ async def images_edits(request: Request, _=Depends(auth)):
             ref_image_data = body.get("reference_image") or body.get("image_url")
 
     if not prompt:
-        prompt = "参考此图片并进行生图创作"
+        prompt = "Generate an image based on this reference image."
 
     req_obj = ImageRequest(
         prompt=prompt,
@@ -1193,8 +1256,11 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
         try:
             def prog_cb(p):
                 store.update_task(task["id"], progress=p)
-            res, acc_id = _run_generation(prompt, "video", timeout, on_progress=prog_cb,
-                                          reference_image=ref_img, on_acquired=_on_acquired)
+            res, acc_id = _run_generation(prompt, "video", timeout, account_id=req.account_id or None, on_progress=prog_cb,
+                                          reference_image=ref_img, on_acquired=_on_acquired,
+                                          on_context=lambda context: store.update_task(task["id"], **context), task_id=task["id"])
+            if _video_file_saved(task["id"]):
+                return
             vurl = media_url(res["filename"])
             store.update_task(task["id"], status="completed", progress=100, account=acc_id,
                               elapsed=round(time.time() - timing["t0"], 1),
@@ -1204,6 +1270,8 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
                                       "filename": res["filename"],
                                       "bytes": res["size"], "kind": res["kind"]})
         except Exception as exc:  # noqa: BLE001
+            if _video_file_saved(task["id"]):
+                return
             store.update_task(task["id"], status="failed",
                               elapsed=round(time.time() - timing["t0"], 1), error=str(exc))
 
@@ -1218,6 +1286,7 @@ def get_video(task_id: str, _=Depends(auth)):
     t = store.get_task(task_id)
     if not t:
         raise HTTPException(404, "task 不存在")
+    _schedule_rendered_harvest(t)
     out = dict(t)
     status = out.get("status")
     if status in ("succeeded", "success", "done"):
@@ -1931,6 +2000,360 @@ def delete_single_media(name: str, _=Depends(auth)):
         raise HTTPException(500, f"删除失败: {e}")
 
 
+# ------------------------- Exact task browser viewer -------------------------
+def _task_session_info(task_id):
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Không tìm thấy tác vụ.")
+    try:
+        view = engine.task_views.info(task_id)
+    except FileNotFoundError:
+        return {"available":False, "task_id":task_id, "status":task.get("status"),
+                "account_label":task.get("account_label"),
+                "can_reopen":bool(task.get("account") and task.get("muse_url") and task.get("status") in ("failed","completed","succeeded")),
+                "message":"Phiên gốc chưa được tạo hoặc đã hết thời gian giữ. Có thể mở lại nếu tác vụ có tài khoản và URL Muse."}
+    if task.get("account") and view["account_id"] != task["account"]:
+        raise HTTPException(409, "Phiên còn giữ thuộc lần thử trước. Không mở nhầm tài khoản của lần thử hiện tại.")
+    account = store.get_account(view["account_id"]) or {}
+    return {"available":True, "task_id":task_id, "status":task.get("status"),
+            "account_label":account.get("label", task.get("account_label", view["account_id"])),
+            "active":view["active"], "can_scroll":view["can_scroll"], "expires_in":view["expires_in"],
+            "reopened":bool(task.get("session_reopened"))}
+
+
+@app.get("/admin/tasks/{task_id}/session")
+def task_session_info(task_id: str, _=Depends(auth)):
+    return _task_session_info(task_id)
+
+
+@app.get("/admin/tasks/{task_id}/session/screenshot")
+def task_session_screenshot(task_id: str, _=Depends(auth)):
+    if not _task_session_info(task_id)["available"]:
+        raise HTTPException(410, "Phiên trình duyệt đã đóng hoặc chưa được tạo.")
+    try:
+        data = engine.task_views.screenshot(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(410, "Phiên trình duyệt không còn tồn tại.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, "Không đọc được hình ảnh của phiên trình duyệt.") from exc
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control":"no-store"})
+
+
+@app.post("/admin/tasks/{task_id}/session/scroll")
+def task_session_scroll(task_id: str, payload: dict = Body(...), _=Depends(auth)):
+    if not _task_session_info(task_id)["available"]:
+        raise HTTPException(410, "Phiên trình duyệt không còn tồn tại.")
+    try:
+        delta = max(-1200, min(1200, int(payload.get("delta",0))))
+        engine.task_views.scroll(task_id, delta)
+    except (TypeError,ValueError) as exc:
+        raise HTTPException(400, "Giá trị cuộn không hợp lệ.") from exc
+    except PermissionError as exc:
+        raise HTTPException(409, "Chỉ xem khi tác vụ đang chạy; có thể cuộn sau khi tác vụ kết thúc.") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(410, "Phiên trình duyệt không còn tồn tại.") from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, "Không cuộn được phiên trình duyệt.") from exc
+    return {"ok":True}
+
+
+@app.post("/admin/tasks/{task_id}/session/reopen")
+async def task_session_reopen(task_id: str, _=Depends(auth)):
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Không tìm thấy tác vụ.")
+    if task.get("status") not in ("completed","failed","succeeded"):
+        raise HTTPException(409, "Tác vụ còn chạy. Hãy xem phiên gốc.")
+    account = store.get_account(task.get("account"))
+    if not account or not account.get("cookies") or not task.get("muse_url"):
+        raise HTTPException(409, "Tác vụ chưa có đủ tài khoản và URL để mở lại.")
+    def reopen():
+        if _task_session_info(task_id)["available"]:
+            return
+        reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=20, record_use=False)
+        try:
+            if not _task_session_info(task_id)["available"]:
+                engine.reopen_task_view(task_id, reserved, task["muse_url"])
+                store.update_task(task_id, session_reopened=True)
+        finally:
+            ACCOUNT_POOL.release(account["id"])
+    try:
+        await asyncio.to_thread(reopen)
+    except (MuseAuthError,MuseGenerationError,ValueError) as exc:
+        raise HTTPException(502, "Không mở lại được phiên của tài khoản này: " + str(exc)) from exc
+    return _task_session_info(task_id)
+
+
+_COLLECTING_TASKS: set[str] = set()
+_COLLECTING_LOCK = threading.Lock()
+
+
+def _collect_accounts(preferred_id: str | None) -> list[dict]:
+    """The account stored with the task first, then the other signed-in cookies."""
+    ordered = []
+    seen = set()
+
+    def add(account):
+        if not account or not account.get("id") or account["id"] in seen or not account.get("cookies"):
+            return
+        if account.get("enabled", True) is False:
+            return
+        seen.add(account["id"])
+        ordered.append(account)
+
+    add(store.get_account(preferred_id) if preferred_id else None)
+    for item in store.list_accounts():
+        if item.get("enabled", True) is False or item.get("essential_ok") is False or not item.get("cookie_count"):
+            continue
+        add(store.get_account(item.get("id")))
+    return ordered
+
+
+def _video_file_saved(task_id: str) -> bool:
+    task = store.get_task(task_id) or {}
+    if task.get("status") not in ("completed", "succeeded"):
+        return False
+    if task.get("url"):
+        return True
+    result = task.get("result")
+    return isinstance(result, dict) and bool(result.get("url"))
+
+
+def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int = 60,
+                          lock_timeout: int = 120, account_wait: int = 60) -> dict:
+    if not GEN_LOCK.acquire(timeout=lock_timeout):
+        raise MuseGenerationError("Trình duyệt đang bận. Hãy thử lấy lại sau.")
+    reserved = None
+    try:
+        reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=account_wait, record_use=False)
+        engine.start()
+        return engine.collect_rendered(
+            reserved["cookies"], muse_url, expect=kind, timeout=timeout,
+            expires=reserved.get("cookies_exp"), account_id=reserved["id"])
+    finally:
+        if reserved:
+            ACCOUNT_POOL.release(reserved["id"])
+        try:
+            engine.close_current_page()
+        except Exception:
+            pass
+        GEN_LOCK.release()
+
+
+_HARVEST_TURN = threading.Lock()
+_HARVEST_NEXT: dict[str, float] = {}
+_HARVEST_MISS: dict[str, int] = {}
+
+
+def _download_rendered(task: dict, muse_url: str, quick: bool = False):
+    accounts = _collect_accounts(task.get("account"))
+    if quick:
+        accounts = accounts[:1]
+    if not accounts:
+        raise MuseGenerationError("Không còn cookie của tài khoản đã chạy prompt này.")
+    kind = "video" if task.get("kind") == "video" else "image"
+    timeout = 25 if quick else 60
+    lock_timeout = 8 if quick else 120
+    account_wait = 8 if quick else 60
+    errors = []
+    for account in accounts:
+        try:
+            return _collect_from_account(
+                account, muse_url, kind, timeout=timeout,
+                lock_timeout=lock_timeout, account_wait=account_wait), account
+        except MuseGenerationError as exc:
+            message = str(exc)
+            if "đang bận" in message or "忙" in message:
+                raise
+            errors.append(message)
+    raise MuseGenerationError(errors[0] if errors else "Không lấy được file đã render.")
+
+
+def _harvest_ready(task: dict, now: float) -> bool:
+    if task.get("kind") != "video" or task.get("status") != "processing":
+        return False
+    if not _safe_muse_thread(task.get("muse_url")) or not task.get("account"):
+        return False
+    if now - float(task.get("updated_at") or 0) < 45:
+        return False
+    return now >= _HARVEST_NEXT.get(task["id"], 0)
+
+
+def _pick_harvest_task(preferred: dict | None) -> dict | None:
+    """One row used to be retried forever and the finished videos behind it stayed at 92%."""
+    now = time.time()
+    if preferred and _harvest_ready(preferred, now) and _HARVEST_MISS.get(preferred["id"], 0) == 0:
+        return preferred
+    best = None
+    best_rank = None
+    for task in list(store.tasks.values()):
+        if not _harvest_ready(task, now):
+            continue
+        rank = (_HARVEST_MISS.get(task["id"], 0), float(task.get("updated_at") or 0))
+        if best_rank is None or rank < best_rank:
+            best, best_rank = task, rank
+    if best:
+        return best
+    if preferred and _harvest_ready(preferred, now):
+        return preferred
+    return None
+
+
+def _schedule_rendered_harvest(task: dict) -> None:
+    """A stuck processing row may already have a rendered video. Download it without a new prompt."""
+    picked = _pick_harvest_task(task)
+    if not picked:
+        return
+    task_id = picked["id"]
+    muse_url = _safe_muse_thread(picked.get("muse_url"))
+    with _COLLECTING_LOCK:
+        if task_id in _COLLECTING_TASKS:
+            return
+        _COLLECTING_TASKS.add(task_id)
+
+    def run():
+        try:
+            current = store.get_task(task_id) or {}
+            if current.get("status") != "processing" or _video_file_saved(task_id):
+                return
+            if not _HARVEST_TURN.acquire(blocking=False):
+                return
+            try:
+                result, account = _download_rendered(current, muse_url, quick=True)
+                if account.get("id") != current.get("account"):
+                    store.update_task(task_id, account=account.get("id"),
+                                      account_label=account.get("label") or account.get("id"))
+                    current = store.get_task(task_id) or current
+                if (store.get_task(task_id) or {}).get("status") == "processing":
+                    _collected_task_payload(current, result)
+                _HARVEST_MISS.pop(task_id, None)
+                _HARVEST_NEXT.pop(task_id, None)
+            finally:
+                _HARVEST_TURN.release()
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            log.info("Chưa lấy được video đã render của %s: %s", task_id, message)
+            if "đang bận" in message or "忙" in message:
+                _HARVEST_NEXT[task_id] = time.time() + 20
+                return
+            misses = _HARVEST_MISS.get(task_id, 0) + 1
+            _HARVEST_MISS[task_id] = misses
+            _HARVEST_NEXT[task_id] = time.time() + 90
+            current = store.get_task(task_id) or {}
+            age = time.time() - float(current.get("created_at") or 0)
+            if (misses >= 2 and current.get("status") == "processing"
+                    and "chưa có video" in message and age >= CFG.video_timeout):
+                store.update_task(
+                    task_id, status="failed", progress=0,
+                    error="Muse chưa gắn file video trong cuộc trò chuyện này. Bấm Lấy video đã render để kiểm tra lại, không gửi prompt mới.")
+        finally:
+            with _COLLECTING_LOCK:
+                _COLLECTING_TASKS.discard(task_id)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _task_media_path(task: dict) -> str:
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    name = str((result or {}).get("filename") or "")
+    if not name:
+        name = str(task.get("url") or "").rsplit("/", 1)[-1].split("?", 1)[0]
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return ""
+    return os.path.join(CFG.media_dir, name)
+
+
+def _drop_page_clip(task: dict) -> bool:
+    """A shared page clip is not a finished thread. Clear it so the row can be collected again."""
+    path = _task_media_path(task)
+    if not file_is_page_clip(path):
+        return False
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    store.update_task(
+        task["id"], status="failed", progress=0, url=None, result=None, video=None,
+        error="File đã lưu không phải video của cuộc trò chuyện. Bấm Nối lại để tải video trong thread, không gửi prompt mới.")
+    return True
+
+
+def _collected_task_payload(task: dict, res: dict) -> None:
+    url = media_url(res["filename"])
+    kind = "video" if task.get("kind") == "video" else "image"
+    fields = {"status": "completed", "progress": 100, "error": None, "url": url,
+              "result": {"url": url, "filename": res["filename"],
+                         "bytes": res["size"], "kind": res.get("kind") or kind}}
+    if kind == "video":
+        fields["video"] = {"url": url}
+    store.update_task(task["id"], **fields)
+
+
+def _safe_muse_thread(value: str | None) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+    parsed = urlsplit(str(value or "").strip())
+    if (parsed.scheme == "https" and parsed.hostname in ("muse.ai", "www.muse.ai")
+            and re.fullmatch(r"/thread/[^/]+/?", parsed.path)
+            and parsed.path.rstrip("/") != "/thread/new"):
+        return urlunsplit(("https", parsed.hostname, parsed.path.rstrip("/"), "", ""))
+    return ""
+
+
+@app.post("/admin/tasks/{task_id}/collect")
+async def collect_rendered_task(task_id: str, payload: dict | None = Body(default=None), _=Depends(auth)):
+    """Download media Muse already rendered. This does not submit the prompt again."""
+    task = store.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Không tìm thấy tác vụ.")
+    if task.get("status") in ("completed", "succeeded") and (
+            task.get("url") or (isinstance(task.get("result"), dict) and task["result"].get("url"))):
+        if not _drop_page_clip(task):
+            return dict(task)
+        task = store.get_task(task_id) or task
+    if task.get("status") not in ("failed",):
+        raise HTTPException(409, "Chỉ lấy file đã render của tác vụ đang báo thất bại.")
+    payload = payload or {}
+    muse_url = _safe_muse_thread(task.get("muse_url")) or _safe_muse_thread(payload.get("muse_url"))
+    if not muse_url:
+        raise HTTPException(409, "Tác vụ chưa có tài khoản và URL cuộc trò chuyện để lấy file.")
+    if not task.get("muse_url"):
+        store.update_task(task_id, muse_url=muse_url)
+        task = store.get_task(task_id) or task
+    if not _collect_accounts(task.get("account")):
+        raise HTTPException(409, "Không còn cookie của tài khoản đã chạy prompt này.")
+    with _COLLECTING_LOCK:
+        if task_id in _COLLECTING_TASKS:
+            raise HTTPException(409, "Đang lấy file của tác vụ này.")
+        _COLLECTING_TASKS.add(task_id)
+
+    def collect():
+        return _download_rendered(task, muse_url, quick=False)
+
+    try:
+        result, account = await asyncio.to_thread(collect)
+        if account.get("id") != task.get("account") or account.get("label") != task.get("account_label"):
+            store.update_task(task_id, account=account.get("id"),
+                              account_label=account.get("label") or account.get("id"))
+            task = store.get_task(task_id) or task
+        _collected_task_payload(task, result)
+    except (MuseAuthError, MuseGenerationError, ValueError) as exc:
+        raise HTTPException(502, "Không lấy được file đã render: " + str(exc)) from exc
+    finally:
+        with _COLLECTING_LOCK:
+            _COLLECTING_TASKS.discard(task_id)
+    updated = store.get_task(task_id) or {}
+    return dict(updated)
+
+
+async def _session_view_cleanup():
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await asyncio.to_thread(engine.task_views.prune)
+        except Exception:
+            log.warning("Không dọn được phiên xem trình duyệt", exc_info=True)
+
+
 # ------------------------- 前端页面 -------------------------
 def _admin_html() -> str:
     p = os.path.join(BASE_DIR, "admin.html")
@@ -2127,7 +2550,7 @@ def get_keepalive_status(_=Depends(auth)):
 # ------------------------- 仓库实时更新检测、通知与一键在线升级 -------------------------
 REPO_URL = "https://github.com/czg86389-hub/muse2api"
 TRACKED_REPO_PATHS = [
-    "app.py", "engine.py", "store.py", "cdp.py", "config.py",
+    "app.py", "engine.py", "session_views.py", "store.py", "cdp.py", "config.py",
     "admin.html", "README.md", "version.json", "requirements.txt",
     "Dockerfile", "docker-compose.yml", ".env.example", ".gitignore",
     "LICENSE", "extension", "deploy", "tools",
@@ -2448,7 +2871,11 @@ async def admin_repo_push(payload: dict = Body(default={}), _=Depends(auth)):
 @app.on_event("startup")
 async def _startup():
     for task in list(store.tasks.values()):
+        if task.get("kind") == "video":
+            _drop_page_clip(task)
         if task.get("kind") in ("image", "video") and task.get("status") in ("queued", "processing"):
+            if task.get("kind") == "video" and _safe_muse_thread(task.get("muse_url")):
+                continue
             store.update_task(task["id"], status="failed", error="服务重启中断了任务，请重新提交")
     if not CFG.api_key:
         import secrets
@@ -2457,6 +2884,7 @@ async def _startup():
         _persist_env("MUSE2API_KEY", new_key)
         log.info("🔑 未检测到 MUSE2API_KEY，已自动生成初始密钥: %s", new_key)
     asyncio.create_task(_keepalive_loop())
+    asyncio.create_task(_session_view_cleanup())
 
 
 @app.on_event("shutdown")

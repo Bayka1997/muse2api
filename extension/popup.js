@@ -8,6 +8,11 @@
 
 const $ = (id) => document.getElementById(id);
 const STORE = 'muse2api_ext_cfg';
+const DEFAULT_CFG = Object.freeze({
+  base: 'http://localhost:18610',
+  key: 'm2a_REPLACE_WITH_YOUR_SECURE_RANDOM_KEY',
+  label: 'muse-main',
+});
 
 const ESSENTIAL = ['hatch_sess', 'hatch_gw', 'hatch_vml', 'hatch_native_auth_device'];
 
@@ -30,9 +35,9 @@ function normBase(v) {
 async function loadCfg() {
   const o = await chrome.storage.local.get(STORE);
   const c = o[STORE] || {};
-  if (c.base) $('base').value = c.base;
-  if (c.key) $('key').value = c.key;
-  if (c.label) $('label').value = c.label;
+  $('base').value = c.base || DEFAULT_CFG.base;
+  $('key').value = c.key || DEFAULT_CFG.key;
+  $('label').value = c.label || DEFAULT_CFG.label;
   // 没有配置过就尝试从当前标签页猜一个（用户在管理页上时）
   if (!c.base) {
     try {

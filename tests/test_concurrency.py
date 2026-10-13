@@ -57,19 +57,23 @@ def test_account_pool_manager():
         )
     )
 
-    pool = app.AccountPoolManager(dummy_store)
+    pool = app.AccountPoolManager(dummy_store, per_account=10)
 
-    # 线程 1 占用 acc-1
+    # 前两次分到两个 cookie, không dồn vào một tài khoản.
     a1 = pool.acquire(timeout=0.5)
     assert a1["id"] == "acc-1"
     assert "acc-1" in pool.busy_accounts
-
-    # 线程 2 并发占用 acc-2（自动避开忙碌的 acc-1）
     a2 = pool.acquire(timeout=0.5)
     assert a2["id"] == "acc-2"
     assert "acc-2" in pool.busy_accounts
 
-    # 此时两个账号都忙，线程 3 应等待并超时
+    # Cookie 1 đã có 1 video vẫn nhận thêm; cookie 2 không bị khóa theo.
+    more = [pool.acquire(timeout=0.2)["id"] for _ in range(18)]
+    assert more.count("acc-1") == 9
+    assert more.count("acc-2") == 9
+    assert pool.busy_counts["acc-1"] == 10
+    assert pool.busy_counts["acc-2"] == 10
+
     t0 = time.monotonic()
     try:
         pool.acquire(timeout=0.1)
@@ -78,16 +82,15 @@ def test_account_pool_manager():
         pass
     assert time.monotonic() - t0 >= 0.08
 
-    # 释放 acc-1 后，线程 3 能够立刻拿到 acc-1
+    # Nhả một slot của cookie 1. Cookie 2 vẫn đầy 10 nhưng cookie 1 nhận việc ngay.
     pool.release(a1["id"])
-    assert "acc-1" not in pool.busy_accounts
-
+    assert pool.busy_counts["acc-1"] == 9
     a3 = pool.acquire(timeout=0.5)
     assert a3["id"] == "acc-1"
 
-    # 清理释放
-    pool.release(a2["id"])
-    pool.release(a3["id"])
+    for aid in ("acc-1", "acc-2"):
+        while aid in pool.busy_accounts:
+            pool.release(aid)
     assert len(pool.busy_accounts) == 0
     print("PASS: test_account_pool_manager")
 

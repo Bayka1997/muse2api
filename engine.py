@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import mimetypes
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 import json
 import logging
 import os
@@ -22,10 +24,29 @@ import time
 import uuid
 
 from cdp import CDP, http_json
+from session_views import TaskSessionViews
 
 log = logging.getLogger("muse2api")
 
 ATT_SEL = '[data-testid^="hatch-chat-attachment-presentation-"]'
+# Muse gắn một video 480×480, 5 giây ở ngoài cuộc trò chuyện. Mọi thread đều thấy
+# cùng một file này; nó không phải video vừa render.
+PAGE_CLIP_BYTES = 357801
+PAGE_CLIP_SHA256 = "ace1b168a5cb90ac8f8c6316961aef6d8ccfdb3c3a8754057d995199365f6b2f"
+
+
+def file_is_page_clip(path: str) -> bool:
+    """True when the file is the shared Muse page clip, not a thread render."""
+    try:
+        if not path or not os.path.isfile(path) or os.path.getsize(path) != PAGE_CLIP_BYTES:
+            return False
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest() == PAGE_CLIP_SHA256
+    except OSError:
+        return False
 
 # 决定账号生死的核心 cookie（缺失或过期 = 会话失效）
 ESSENTIAL_COOKIES = ("hatch_sess", "hatch_gw", "hatch_vml",
@@ -49,6 +70,7 @@ class MuseEngine:
         self._start_lock = threading.Lock()
         self._active_contexts: set[str] = set()
         self._contexts_lock = threading.Lock()
+        self.task_views = TaskSessionViews(getattr(cfg, "cdp_port", 19210), self._dispose_view_context)
         self._last_http_renew: dict[str, float] = {}
         self._log = None
         os.makedirs(cfg.profile_dir, exist_ok=True)
@@ -83,6 +105,44 @@ class MuseEngine:
     @current_context_id.setter
     def current_context_id(self, val: str | None):
         self._ensure_local().current_context_id = val
+
+    @property
+    def current_target_id(self):
+        return getattr(self._ensure_local(), "target_id", None)
+
+    def _dispose_view_context(self, context_id):
+        if self.browser:
+            try:
+                self.browser.send("Target.disposeBrowserContext", {"browserContextId":context_id}, timeout=10)
+            except Exception:
+                pass
+        with self._contexts_lock:
+            self._active_contexts.discard(context_id)
+
+    def bind_task_view(self):
+        task_id = getattr(self._local, "task_view_id", None)
+        if task_id and self.current_target_id and self.current_context_id and self.current_acc_id:
+            self.task_views.bind(task_id, self.current_target_id, self.current_context_id, self.current_acc_id)
+
+    def reopen_task_view(self, task_id, account, url):
+        """Reopen only a server-selected account/conversation in a new isolated browser context."""
+        parsed = urlsplit(url or "")
+        if not (parsed.scheme == "https" and parsed.hostname in ("muse.ai","www.muse.ai")
+                and re.fullmatch(r"/thread/[^/]+/?", parsed.path) and parsed.path.rstrip("/") != "/thread/new"):
+            raise ValueError("Tác vụ chưa có URL cuộc trò chuyện Muse hợp lệ.")
+        self._local.task_view_id = task_id
+        try:
+            self.start()
+            self.ensure_page(account["cookies"], account.get("cookies_exp"), account_id=account["id"])
+            if not self.current_context_id:
+                raise MuseGenerationError("Không tạo được phiên trình duyệt riêng cho tài khoản này.")
+            self.page.send("Page.navigate", {"url":urlunsplit(("https",parsed.hostname,parsed.path,"",""))})
+            self.bind_task_view()
+            return self.task_views.info(task_id)
+        finally:
+            self._close_page()
+            self.task_views.finish(task_id)
+            self._local.task_view_id = None
 
     # ---------------- 浏览器生命周期 ----------------
     def _debug_url(self):
@@ -144,6 +204,7 @@ class MuseEngine:
 
     def stop(self):
         with self._start_lock:
+            self.task_views.close()
             self._close_page()
             if self.browser:
                 with self._contexts_lock:
@@ -177,7 +238,8 @@ class MuseEngine:
             except Exception:
                 pass
             self.page = None
-        if ctx_id and self.browser:
+        preserve = bool(ctx_id and getattr(self, "task_views", None) and self.task_views.owns_context(ctx_id))
+        if ctx_id and self.browser and not preserve:
             try:
                 self.browser.send("Target.disposeBrowserContext", {"browserContextId": ctx_id})
             except Exception:
@@ -185,7 +247,9 @@ class MuseEngine:
             with self._contexts_lock:
                 self._active_contexts.discard(ctx_id)
             self.current_context_id = None
+        self.current_context_id = None
         self.current_acc_id = None
+        self._ensure_local().target_id = None
 
     def _open_page(self):
         """为当前工作线程创建独立的页面。
@@ -211,14 +275,26 @@ class MuseEngine:
                         page.send("Runtime.enable")
                         page.send("Browser.setDownloadBehavior",
                                   {"behavior": "allow", "downloadPath": self.cfg.download_dir})
+                        self._ensure_local().target_id = target_id
                         return page
             except Exception as exc:
-                log.warning("Target.createBrowserContext 创建隔离上下文失败，回退到普通标签页: %s", exc)
+                log.warning("Target.createBrowserContext 创建隔离上下文失败: %s", exc)
+                if self.current_context_id:
+                    self._dispose_view_context(self.current_context_id)
+                    self.current_context_id = None
+                if getattr(self._ensure_local(), "task_view_id", None):
+                    raise MuseGenerationError("Không tạo được phiên riêng cho tác vụ; đã dừng để tránh dùng nhầm tài khoản.") from exc
+        if getattr(self._ensure_local(), "task_view_id", None):
+            if self.current_context_id:
+                self._dispose_view_context(self.current_context_id)
+                self.current_context_id = None
+            raise MuseGenerationError("Không tạo được tab trong phiên riêng cho tác vụ.")
 
         import requests
         tgt = requests.put(
             f"http://127.0.0.1:{self.cfg.cdp_port}/json/new?about:blank",
             timeout=10).json()
+        self._ensure_local().target_id = tgt.get("id")
         page = CDP(tgt["webSocketDebuggerUrl"], timeout=180)
         page.send("Network.enable")
         page.send("Page.enable")
@@ -593,7 +669,10 @@ class MuseEngine:
         "  var img = el.querySelector('img') || (el.tagName === 'IMG' ? el : null);"
         "  var isVid = (tid || '').includes('video') || !!v;"
         "  var primary = isVid ? (v || img) : (img || v);"
+        "  var source = v ? v.querySelector('source') : null;"
+        "  var vSrc = v ? (v.currentSrc || v.src || (source && (source.src || source.getAttribute('src') || '')) || '') : '';"
         "  var src = primary ? (primary.currentSrc || primary.src || '') : '';"
+        "  if(!src) src = vSrc;"
         "  if(src && !seen.has(src)){"
         "    seen.add(src);"
         "    list.push({"
@@ -601,7 +680,7 @@ class MuseEngine:
         "      hasVideo: !!v,"
         "      hasImg: !!img,"
         "      src: src,"
-        "      vSrc: v ? (v.currentSrc || v.src || '') : '',"
+        "      vSrc: vSrc,"
         "      iSrc: img ? (img.currentSrc || img.src || '') : '',"
         "      w: primary ? (primary.videoWidth || primary.naturalWidth || 0) : 0,"
         "      h: primary ? (primary.videoHeight || primary.naturalHeight || 0) : 0"
@@ -609,6 +688,19 @@ class MuseEngine:
         "  }"
         "}"
         "document.querySelectorAll('[data-testid^=\"hatch-chat-attachment-presentation-\"]').forEach(function(a){ addEl(a, a.getAttribute('data-testid')); });"
+        "document.querySelectorAll('video').forEach(function(v){"
+        "  var thread=v.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"]');"
+        "  if(!thread || thread.closest('form, [class*=chat-user-bubble], [class*=\"group/msg\"]')) return;"
+        "  addEl(v, thread.getAttribute('data-testid') || 'thread-video');"
+        "});"
+        "document.querySelectorAll('a[href]').forEach(function(a){"
+        "  var h=a.href||'';"
+        "  if(!/\\.(mp4|webm|mov)(\\?|$)/i.test(h) || seen.has(h)) return;"
+        "  var thread=a.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"]');"
+        "  if(!thread || thread.closest('form, [class*=chat-user-bubble], [class*=\"group/msg\"]')) return;"
+        "  seen.add(h);"
+        "  list.push({tid: thread.getAttribute('data-testid') || 'thread-video', hasVideo:true, hasImg:false, src:h, vSrc:h, iSrc:'', w:0, h:0});"
+        "});"
         "document.querySelectorAll('div[class*=\"hatch-agent-bubble-bg\"] img, div[class*=\"hatch-agent-bubble-bg\"] video').forEach(function(m){"
         "  var s = m.currentSrc || m.src || '';"
         "  if(s && !s.includes('avatar') && !s.includes('emoji')) addEl(m.parentElement || m, 'agent-media');"
@@ -729,16 +821,13 @@ class MuseEngine:
         try:
             self.page.js(
                 "(function(){"
-                "var els=[...document.querySelectorAll('*')].filter(function(e){"
-                "var s=getComputedStyle(e);"
-                "return (s.overflowY==='auto'||s.overflowY==='scroll')"
-                "&&e.scrollHeight>e.clientHeight+100;});"
-                "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight;});"
-                "if(els[0])els[0].scrollTop=els[0].scrollHeight;"
+                + self._PICK_CHAT_SCROLLER_JS +
+                "var el=pickChatScroller();"
+                "if(el)el.scrollTop=el.scrollHeight;"
                 "var s=document.scrollingElement||document.body;"
                 "s.scrollTop=s.scrollHeight;"
-                "var el=document.querySelector('textarea');"
-                "if(el)el.scrollIntoView({block:'end'});return 1;})()")
+                "var box=document.querySelector('textarea');"
+                "if(box)box.scrollIntoView({block:'end'});return 1;})()")
         except Exception:  # noqa: BLE001
             pass
 
@@ -838,15 +927,17 @@ class MuseEngine:
             if cur_cnt > base_agent_cnt and cur_txt and not has_stop and len(atts) <= base_att_cnt:
                 # 检查是否包含媒体文件生成关键词（如 .webp, .png, .mp4, imagine_media 等），若是则说明正在产出媒体，绝不能误判为纯文本拒答
                 is_media_report = bool(re.search(r"\.(?:webp|png|jpe?g|mp4|webm)|imagine_media|deliverable|generated\s+.*image|verified\s+generated|artifact", cur_txt, re.I))
-                if not is_media_report:
+                # Video text is not a result. Muse may narrate while the file is still rendering,
+                # so only a real video attachment or the task deadline can end a video wait.
+                if expect == "video" or is_media_report:
+                    txt_stable = 0
+                else:
                     if cur_txt == last_txt:
                         txt_stable += 1
                     else:
                         last_txt, txt_stable = cur_txt, 0
                     if txt_stable >= 15 and elapsed > 8.0:
                         raise MuseGenerationError(f"模型未生成媒体，仅返回文本: {cur_txt[:120]}")
-                else:
-                    txt_stable = 0
             else:
                 txt_stable = 0
         return None
@@ -1205,14 +1296,33 @@ class MuseEngine:
         else:
             raise MuseGenerationError("参考图上传未确认，已停止生成")
         time.sleep(0.5)
+    def generation_context(self) -> dict:
+        """Read only the current worker's confirmed Muse conversation, never another account's tab."""
+        if not getattr(self._local, "generation_submitted", False):
+            return {}
+        try:
+            raw = self.page.js("window.location.href") if self.page else ""
+            url = urlsplit(raw or "")
+            if (url.scheme == "https" and url.hostname in ("muse.ai", "www.muse.ai")
+                    and re.fullmatch(r"/thread/[^/]+/?", url.path)
+                    and url.path.rstrip("/") != "/thread/new"):
+                self._local.generation_url = urlunsplit(("https", url.hostname, url.path, "", ""))
+        except Exception:  # noqa: BLE001
+            pass
+        value = getattr(self._local, "generation_url", None)
+        return {"muse_url": value} if value else {}
+
     # ---------------- 主流程 ----------------
     def generate(self, cookies: dict, prompt: str, expect: str = "image",
                  timeout: int = 240, expires: dict | None = None, account_id: str | None = None,
                  on_progress=None, reference_image: str | None = None,
                  stop_event=None) -> dict:
+        self._local.generation_submitted = False
+        self._local.generation_url = None
         deadline = time.monotonic() + timeout
         self.ensure_page(cookies, expires, account_id=account_id)
         self.reset_thread(for_chat=False)
+        self.bind_task_view()
         self._scroll_bottom()
         if reference_image:
             self._attach_image(reference_image)
@@ -1227,6 +1337,8 @@ class MuseEngine:
             raise MuseGenerationError("任务准备超时，已停止发送")
         if self._send(prompt) not in ("clicked", "enter-sent"):
             raise MuseGenerationError("提示词发送未确认，已停止生成")
+        self._local.generation_submitted = True
+        self.generation_context()
         att = self._wait_attachment(
             baseline_src, max(0, deadline - time.monotonic()), expect, on_progress=on_progress,
             base_agent_cnt=base_agent_cnt, base_att_cnt=len(atts_before),
@@ -1235,7 +1347,164 @@ class MuseEngine:
         if not att:
             self._debug_dump("no-attachment")
             raise MuseGenerationError("等待生成超时，未出现新的生成结果")
+        return self._deliver_attachment(att, expect)
 
+    _PICK_CHAT_SCROLLER_JS = (
+        "function pickChatScroller(){"
+        "var nodes=[].slice.call(document.querySelectorAll("
+        "'div[class*=\"hatch-chat-groupable-bubble\"],[data-testid^=\"hatch-chat-attachment-presentation-\"]'));"
+        "function scrollable(el){"
+        "if(!el||el===document.body||el===document.documentElement)return false;"
+        "var s=getComputedStyle(el);"
+        "return (s.overflowY==='auto'||s.overflowY==='scroll')&&el.scrollHeight>el.clientHeight+80;}"
+        "for(var i=nodes.length-1;i>=0;i--){"
+        "var el=nodes[i].parentElement;"
+        "while(el){if(scrollable(el))return el;el=el.parentElement;}}"
+        "var els=[].slice.call(document.querySelectorAll('*')).filter(scrollable);"
+        "els.sort(function(a,b){return b.scrollHeight-a.scrollHeight;});"
+        "return els[0]||null;}"
+    )
+
+    def _chat_scroll_offsets(self) -> list:
+        """Muse chỉ gắn video vào DOM ở vị trí đang cuộn. Quét từ đầu tới cuối cuộc trò chuyện."""
+        script = (
+            "(function(){" + self._PICK_CHAT_SCROLLER_JS +
+            "var el=pickChatScroller(); if(!el) return JSON.stringify([]);"
+            "var step=Math.max(el.clientHeight*0.85, 480); var marks=[];"
+            "for(var y=0; y<=el.scrollHeight; y+=step) marks.push(Math.round(y));"
+            "marks.push(el.scrollHeight); return JSON.stringify(marks);})()"
+        )
+        try:
+            raw = self.page.js(script)
+            marks = json.loads(raw) if isinstance(raw, str) else raw
+            return marks if isinstance(marks, list) else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _scroll_chat_to(self, offset: int):
+        self.page.js(
+            "(function(y){" + self._PICK_CHAT_SCROLLER_JS +
+            "var el=pickChatScroller(); if(el) el.scrollTop=y; return 1;})(%d)" % int(offset))
+
+    def _scan_rendered_media(self, expect: str, skipped: set | None = None) -> dict | None:
+        """Wait at the current scroll position first. Muse assigns the blob src a few
+        seconds after the attachment shell appears; scrolling immediately unmounts it."""
+        for _ in range(14):
+            found = self._rendered_media(expect, skipped)
+            if found:
+                return found
+            time.sleep(0.6)
+        for offset in self._chat_scroll_offsets()[:8]:
+            try:
+                self._scroll_chat_to(offset)
+            except Exception:  # noqa: BLE001
+                break
+            time.sleep(0.5)
+            found = self._rendered_media(expect, skipped)
+            if found:
+                return found
+        self._scroll_bottom()
+        time.sleep(0.8)
+        return self._rendered_media(expect, skipped)
+
+    def _resource_videos(self) -> list[dict]:
+        """Video files the page already fetched. A virtualized player may not be mounted."""
+        script = (
+            "(function(){var list=[];"
+            "if(!window.performance||!performance.getEntriesByType) return '[]';"
+            "performance.getEntriesByType('resource').forEach(function(entry){"
+            "var h=entry.name||'';"
+            "if(/\\/videos\\/avatars\\//i.test(h)) return;"
+            "if(/\\.(mp4|webm|mov)(\\?|$)/i.test(h))"
+            "list.push({tid:'thread-video',hasVideo:true,hasImg:false,src:h,vSrc:h,iSrc:'',w:0,h:0});"
+            "});return JSON.stringify(list);})()"
+        )
+        try:
+            raw = self.page.js(script) if self.page else ""
+            found = json.loads(raw) if isinstance(raw, str) else raw
+            return found if isinstance(found, list) else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _media_candidate(self, att: dict, expect: str, skipped: set) -> bool:
+        tid = (att.get("tid") or "").lower()
+        has_video = bool(att.get("hasVideo"))
+        src = att.get("src") or ""
+        v_src = att.get("vSrc") or ""
+        video_src = v_src or (src if src.endswith((".mp4", ".webm", ".mov")) else "")
+        if src in skipped or video_src in skipped:
+            return False
+        if expect == "video":
+            # tid "video" / "video-link" là player dùng chung của trang, không thuộc thread.
+            if tid in ("video", "video-link") or not video_src:
+                return False
+            if "/videos/avatars/" in video_src:
+                return False
+            width = int(att.get("w") or 0)
+            height = int(att.get("h") or 0)
+            if width == 480 and height == 480:
+                return False
+            # Blob player reports 0×0 until the file is actually attached.
+            if video_src.startswith("blob:") and (width <= 0 or height <= 0):
+                return False
+            return True
+        return bool(src) and not video_src and (("image" in tid) or not has_video)
+
+    def _rendered_media(self, expect: str, skipped: set | None = None) -> dict | None:
+        """Latest file that belongs to this thread. Page players and posters do not count."""
+        skipped = skipped or set()
+        attachments = [att for att in self.attachments()
+                       if self._media_candidate(att, expect, skipped)]
+        if attachments:
+            return attachments[-1]
+        if expect != "video":
+            return None
+        resources = [att for att in self._resource_videos()
+                     if self._media_candidate(att, expect, skipped)]
+        return resources[-1] if resources else None
+
+    def collect_rendered(self, cookies: dict, url: str, expect: str = "video",
+                         expires: dict | None = None, account_id: str | None = None,
+                         timeout: int = 60) -> dict:
+        """Download a file Muse already rendered. Never sends the prompt again."""
+        parsed = urlsplit(url or "")
+        if not (parsed.scheme == "https" and parsed.hostname in ("muse.ai", "www.muse.ai")
+                and re.fullmatch(r"/thread/[^/]+/?", parsed.path)
+                and parsed.path.rstrip("/") != "/thread/new"):
+            raise ValueError("Tác vụ chưa có URL cuộc trò chuyện Muse hợp lệ.")
+        target = urlunsplit(("https", parsed.hostname, parsed.path, "", ""))
+        self._local.generation_submitted = False
+        self.ensure_page(cookies, expires, account_id=account_id)
+        self.page.send("Page.navigate", {"url": target})
+        self._wait_ws_ready(self.page, timeout=min(20, max(1, timeout)))
+        deadline = time.time() + max(1, timeout)
+        skipped: set[str] = set()
+        while time.time() < deadline:
+            att = self._scan_rendered_media(expect, skipped)
+            if not att:
+                time.sleep(0.8)
+                continue
+            selected = (att.get("vSrc") if expect == "video" else None) or att.get("src") or ""
+            try:
+                result = self._deliver_attachment(att, expect)
+            except MuseGenerationError:
+                if selected:
+                    skipped.add(selected)
+                continue
+            if expect == "video" and file_is_page_clip(result.get("path") or ""):
+                try:
+                    os.remove(result["path"])
+                except OSError:
+                    pass
+                if selected:
+                    skipped.add(selected)
+                continue
+            return result
+        self._debug_dump("no-rendered-file")
+        label = "video" if expect == "video" else "ảnh"
+        raise MuseGenerationError(f"Cuộc trò chuyện chưa có {label} đã render để lấy về.")
+
+    def _deliver_attachment(self, att: dict, expect: str) -> dict:
         os.makedirs(self.cfg.media_dir, exist_ok=True)
         data = mime = url = None
         selected_src = (att.get("vSrc") if expect == "video" else None) or att.get("src") or ""

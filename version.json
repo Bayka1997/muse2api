@@ -3,11 +3,11 @@
   "updated_at": "2026-10-13",
   "repo": "https://github.com/czg86389-hub/muse2api",
   "highlights": [
-    "修复多账号额度查询串读：额度查询绑定对应账号的浏览器页面，避免不同账号间显示错误余额和用量。",
-    "额度读取失败或未读到有效数据时保留旧缓存，并明确报告失败状态，避免把无效结果当成实时额度。",
-    "修复保活成功误报：区分唤醒请求已接受与 VM 已运行，只有复核状态为 RUNNING 才报告唤醒成功。",
-    "管理页显示额度查询时间和过期提示；账号测试分别反馈会话有效性和额度读取状态。",
-    "维护探测不再更新最后使用时间，后台保活按续期需要执行，避免维护流量被计为用户使用或频繁触发保活。",
-    "新增离线回归测试，覆盖账号额度隔离及 VM 唤醒状态确认。"
+    "Sửa lỗi đọc nhầm hạn mức giữa các tài khoản: mỗi truy vấn gắn với trang trình duyệt của đúng tài khoản.",
+    "Giữ dữ liệu hạn mức đã lưu khi đọc thất bại hoặc không có dữ liệu hợp lệ, đồng thời báo rõ lỗi.",
+    "Chỉ báo đánh thức VM thành công khi kiểm tra lại thấy trạng thái RUNNING; phân biệt với việc yêu cầu đã được tiếp nhận.",
+    "Hiển thị thời điểm kiểm tra hạn mức và cảnh báo dữ liệu cũ; kiểm tra tài khoản báo riêng trạng thái phiên và hạn mức.",
+    "Kiểm tra bảo trì không cập nhật lần dùng cuối; chỉ duy trì phiên khi cần gia hạn.",
+    "Thêm kiểm tra hồi quy ngoại tuyến cho việc tách hạn mức tài khoản và xác nhận đánh thức VM."
   ]
 }
