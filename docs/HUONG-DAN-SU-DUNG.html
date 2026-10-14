@@ -1,0 +1,226 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hướng dẫn sử dụng Muse2API</title><style>
+body{margin:0;background:#edf2f7;color:#253247;font:16px/1.7 "Segoe UI",Arial,sans-serif}
+main{max-width:1060px;margin:35px auto;padding:45px 55px;background:white;border-radius:15px}
+h1{font-size:38px;line-height:1.2;color:#12365b}h2{margin-top:48px;color:#17456e;font-size:27px}h3{font-size:20px;margin-top:26px}
+li{margin:6px 0}code{font:14px/1.5 Consolas,monospace;background:#eef3f8;padding:2px 4px;border-radius:4px}
+pre{background:#102337;color:#e8f1fa;padding:20px;border-radius:9px;overflow:auto}pre code{background:none;color:inherit;padding:0}
+table{width:100%;border-collapse:collapse;font-size:15px}td,th{text-align:left;border:1px solid #d9e2ec;padding:10px;vertical-align:top}th{background:#eaf1f8;color:#12365b}
+.table-wrap{overflow:auto}figure{margin:25px 0}img{max-width:100%;height:auto;border:1px solid #d9e2ec;border-radius:9px}
+@media(max-width:700px){main{padding:24px;margin:0;border-radius:0}h1{font-size:30px}}
+@media print{body{background:white}main{margin:0;padding:0;max-width:none}h2,h3{break-after:avoid}figure,pre,tr{break-inside:avoid}pre{white-space:pre-wrap}h2{margin-top:28px}}
+</style></head><body><main><h1 id="section-0">Hướng dẫn sử dụng Muse2API</h1>
+<p><strong>Phiên bản đối chiếu: 1.6.1 · Ngày: 14/10/2026 · Dành cho Windows và giao diện tiếng Việt</strong></p>
+<p>Muse2API là dịch vụ chạy trên máy bạn, dùng phiên đăng nhập Muse để cung cấp API hội thoại, tạo ảnh và tạo video. Bạn có thể thao tác trực tiếp trong trang quản trị hoặc kết nối ứng dụng tương thích OpenAI. Cần có tài khoản Muse dùng được và máy chạy dịch vụ phải truy cập được Muse.</p>
+<h2 id="section-3">Mục lục</h2>
+<ol><li>Chuẩn bị và khởi động</li><li>Cấu hình khóa trong .env</li><li>Đăng nhập trang quản trị</li><li>Nhập tài khoản bằng tiện ích</li><li>Nhập cookie thủ công</li><li>Kiểm tra tài khoản và hạn mức</li><li>Tạo ảnh và video đơn lẻ</li><li>Chạy hàng loạt</li><li>Khôi phục tác vụ và tải kết quả</li><li>Lịch sử tác vụ và thư viện media</li><li>Kết nối ứng dụng và gọi API</li><li>Cấu hình nâng cao</li><li>Docker và truy cập từ máy khác</li><li>Sao lưu, cập nhật và dừng dịch vụ</li><li>Khắc phục sự cố</li></ol>
+<p>Ảnh bên dưới được dựng từ HTML giao diện của dự án, với dữ liệu minh họa và mã JavaScript ứng dụng được tắt. Đây là ảnh hướng dẫn vị trí thao tác, không phải kết quả chạy tài khoản thật.</p>
+<h2 id="section-6">1. Chuẩn bị và khởi động</h2>
+<h3 id="section-7">1.1. Điều kiện cần có</h3>
+<ul><li>Windows có Python 3.10 trở lên, Google Chrome hoặc Microsoft Edge.</li><li>Có kết nối mạng để cài thư viện lần đầu và truy cập Muse khi sử dụng.</li><li>Đủ dung lượng cho môi trường Python, profile trình duyệt và ảnh/video tạo ra. Ổ C vẫn cần dung lượng trống dù đặt dự án trên ổ F.</li><li>Tài khoản đã đăng nhập được tại https://muse.ai/ và có quyền/hạn mức cho loại nội dung muốn tạo.</li></ul>
+<h3 id="section-9">1.2. Chạy trên máy Windows hiện tại</h3>
+<ol><li>Mở thư mục <code>F:\Tool\muse2api</code>.</li><li>Cấu hình khóa theo mục 2 trước khi sử dụng.</li><li>Bấm đúp <code>START.bat</code>.</li><li>Lần đầu, trình khởi động tạo <code>.venv</code> rồi cài các thư viện trong <code>requirements.txt</code>. Đợi quá trình hoàn tất.</li><li>Khi dịch vụ sẵn sàng, trang quản trị tự mở. Giữ cửa sổ terminal mở trong suốt thời gian chạy.</li></ol>
+<p>Có thể chạy từ PowerShell:</p>
+<pre><code data-language="powershell">Set-Location F:\Tool\muse2api
+.\START.bat</code></pre>
+<p>Nếu trang không tự mở, vào <code>http://localhost:18610/admin</code>. Nếu đã đổi cổng, thay <code>18610</code> bằng cổng mới.</p>
+<p><strong>Lưu ý:</strong> Gói Windows này là mã nguồn có trình khởi động, chưa chứa sẵn Python. Không cần Docker hoặc WSL cho cách chạy này. Nếu <code>.env</code> đã tồn tại, trình khởi động giữ cấu hình hiện có; nó chỉ sinh khóa ngẫu nhiên khi chưa có file.</p>
+<h2 id="section-15">2. Cấu hình khóa trong .env</h2>
+<h3 id="section-16">2.1. Giá trị đang được chọn trong IDE là gì?</h3>
+<p><code>m2a_REPLACE_WITH_YOUR_SECURE_RANDOM_KEY</code> là giá trị mẫu. Hãy thay nó bằng khóa riêng của bạn tại dòng <code>MUSE2API_KEY=...</code>. Khóa này dùng cho cả trang quản trị, tiện ích nhập cookie và ứng dụng gọi API.</p>
+<p>Trong terminal PowerShell, chạy lệnh sau để tạo một khóa ngẫu nhiên; lệnh chỉ in khóa, không tự sửa file:</p>
+<pre><code data-language="powershell">.\.venv\Scripts\python.exe -c &quot;import secrets; print(&#x27;m2a_&#x27; + secrets.token_urlsafe(32))&quot;</code></pre>
+<p>Nếu chưa có <code>.venv</code>, dùng <code>py -3</code> thay cho <code>.\.venv\Scripts\python.exe</code>. Sao chép kết quả vào <code>.env</code>, lưu file rồi khởi động lại dịch vụ.</p>
+<h3 id="section-21">2.2. Mẫu cấu hình chạy cục bộ</h3>
+<pre><code data-language="ini">MUSE2API_KEY=m2a_DAN_KHOA_NGAU_NHIEN_CUA_BAN_VAO_DAY
+MUSE2API_HOST=127.0.0.1
+MUSE2API_PORT=18610
+MUSE2API_CHROMIUM=
+MUSE2API_CONCURRENCY=2
+MUSE2API_PER_ACCOUNT=1
+MUSE2API_IMAGE_TIMEOUT=240
+MUSE2API_VIDEO_TIMEOUT=600
+MUSE2API_CHAT_TIMEOUT=300</code></pre>
+<p>Giá trị khóa trong ví dụ cũng là chỗ giữ chỗ. Với lần chạy đầu, 2 tác vụ toàn hệ thống và 1 tác vụ mỗi tài khoản giúp dễ theo dõi; tăng dần khi đã chạy ổn định. Hai giá trị này là cấu hình khởi đầu đề xuất, không phải mặc định của mã nguồn hiện tại.</p>
+<p>Để trống <code>MUSE2API_CHROMIUM</code> cho phép tự dò trình duyệt. Nếu không tìm được Chrome/Edge, điền đường dẫn đầy đủ:</p>
+<pre><code data-language="ini">MUSE2API_CHROMIUM=C:\Program Files\Google\Chrome\Application\chrome.exe</code></pre>
+<p><strong>Sau mỗi lần sửa <code>.env</code>, dừng và chạy lại dịch vụ.</strong> Biến môi trường đã được đặt trong hệ điều hành hoặc terminal có ưu tiên cao hơn giá trị cùng tên trong <code>.env</code>.</p>
+<h2 id="section-27">3. Đăng nhập trang quản trị</h2>
+<figure><img alt="Trang nhóm tài khoản và thông tin kết nối" src="images/01-tai-khoan.png"></figure>
+<p><em>Hình 1. Thanh chọn chức năng, thông tin kết nối và khu vực nhập tài khoản.</em></p>
+<ol><li>Mở <code>http://localhost:18610/admin</code>.</li><li>Dán khóa của dòng <code>MUSE2API_KEY</code> vào ô API Key ở góc trên, nhấn <strong>Lưu</strong>. Khi chạy bằng <code>START.bat</code>, URL tự mở thường đã chứa khóa.</li><li>Vào <strong>Nhóm tài khoản</strong>. Trong <strong>Thông tin kết nối</strong>, sao chép BASE URL và API Key khi cần tích hợp.</li><li>Nút <strong>Hiện</strong> cho phép xem khóa; <strong>Tạo lại</strong> thay khóa và làm khóa cũ mất hiệu lực ngay. Sau khi tạo lại, cập nhật khóa trong tiện ích và mọi ứng dụng đang kết nối.</li></ol>
+<div class="table-wrap"><table><tr><th>Nơi sử dụng</th><th>Địa chỉ khi chạy cục bộ</th></tr><tr><td>Trang quản trị</td><td>http://localhost:18610/admin</td></tr><tr><td>Tiện ích nhập cookie</td><td>http://localhost:18610</td></tr><tr><td>Ứng dụng tương thích OpenAI</td><td>http://localhost:18610/v1</td></tr><tr><td>Kiểm tra dịch vụ</td><td>http://localhost:18610/healthz</td></tr></table></div>
+<p>Trình duyệt lưu khóa để dùng lần sau. Không chia sẻ ảnh có khóa, cookie hoặc đường dẫn quản trị chứa <code>?key=...</code>.</p>
+<h2 id="section-33">4. Nhập tài khoản bằng tiện ích</h2>
+<p>Đây là cách thuận tiện nhất vì tiện ích đọc được cả cookie HttpOnly mà mã JavaScript thông thường trên trang không đọc được.</p>
+<h3 id="section-35">4.1. Cài tiện ích từ thư mục dự án</h3>
+<ol><li>Chrome: mở <code>chrome://extensions</code>. Edge: mở <code>edge://extensions</code>.</li><li>Bật <strong>Chế độ dành cho nhà phát triển / Developer mode</strong>.</li><li>Chọn <strong>Tải tiện ích đã giải nén / Load unpacked</strong>.</li><li>Chọn đúng thư mục <code>F:\Tool\muse2api\extension</code>, nơi chứa <code>manifest.json</code>.</li><li>Ghim tiện ích trên thanh công cụ để dễ mở.</li></ol>
+<h3 id="section-37">4.2. Đăng nhập và nhập phiên Muse</h3>
+<figure><img alt="Biểu mẫu tiện ích nhập tài khoản" src="images/02-tien-ich.png"></figure>
+<p><em>Hình 2. Tiện ích có giao diện tiếng Trung; nhập địa chỉ dịch vụ, khóa và nhãn tài khoản.</em></p>
+<ol><li>Trong chính trình duyệt vừa cài tiện ích, mở Muse và đăng nhập đến khi nhìn thấy giao diện sử dụng.</li><li>Mở tiện ích rồi nhập thông tin theo bảng bên dưới.</li><li>Bấm <strong>读取并导入</strong> để đọc cookie và nhập vào dịch vụ.</li><li>Khi tiện ích báo nhập thành công, quay lại <strong>Nhóm tài khoản</strong> và làm mới trang.</li><li>Bấm <strong>Kiểm tra</strong> cho tài khoản vừa nhập, sau đó xem trạng thái và hạn mức.</li></ol>
+<div class="table-wrap"><table><tr><th>Nhãn trên tiện ích</th><th>Ý nghĩa</th><th>Giá trị mẫu</th></tr><tr><td>服务地址（BASE URL）</td><td>Địa chỉ gốc dịch vụ</td><td>http://localhost:18610</td></tr><tr><td>API Key</td><td>Khóa truy cập</td><td>Khóa trong .env</td></tr><tr><td>账号标签（可留空）</td><td>Nhãn tài khoản, có thể bỏ trống</td><td>muse-main</td></tr><tr><td>读取并导入</td><td>Đọc và nhập cookie</td><td>Nút thực hiện</td></tr></table></div>
+<p>Các cookie cốt lõi gồm <code>hatch_sess</code>, <code>hatch_gw</code>, <code>hatch_vml</code>, <code>hatch_native_auth_device</code>. Không dùng <code>document.cookie</code> để thay thế việc xuất cookie đầy đủ. Để thêm tài khoản khác, đăng nhập tài khoản đó trong trình duyệt rồi nhập tiếp với nhãn dễ phân biệt.</p>
+<h2 id="section-43">5. Nhập cookie thủ công</h2>
+<p>Nếu không dùng tiện ích, mở <strong>Lấy Cookie</strong> và làm theo phần <strong>Sao chép thủ công</strong>. Trong Developer Tools của trình duyệt, tìm một yêu cầu gửi đến Muse có header <code>Cookie</code>; sao chép giá trị header đầy đủ. Có thể cần tải lại trang để thấy yêu cầu mới.</p>
+<ol><li>Vào <strong>Nhóm tài khoản → Thêm tài khoản</strong>.</li><li>Nhập nhãn như <code>muse-main</code>.</li><li>Dán chuỗi cookie vào ô <strong>Chuỗi Cookie</strong>.</li><li>Bấm <strong>Nhập tài khoản</strong>, rồi <strong>Kiểm tra</strong>.</li></ol>
+<p>Nhập hàng loạt: mỗi dòng là một tài khoản, theo cấu trúc <code>nhãn | chuỗi cookie</code>:</p>
+<pre><code data-language="text">acc-01 | hatch_sess=GIA_TRI_1; hatch_gw=GIA_TRI_2; hatch_vml=GIA_TRI_3; hatch_native_auth_device=GIA_TRI_4
+acc-02 | hatch_sess=GIA_TRI_5; hatch_gw=GIA_TRI_6; hatch_vml=GIA_TRI_7; hatch_native_auth_device=GIA_TRI_8</code></pre>
+<p>Đây là ví dụ cấu trúc, không phải cookie dùng được. Khi phiên thay đổi, dùng nút <strong>Cập nhật Cookie</strong> của đúng tài khoản để thay bằng chuỗi mới.</p>
+<h2 id="section-49">6. Kiểm tra tài khoản và hạn mức</h2>
+<div class="table-wrap"><table><tr><th>Mục / nút</th><th>Cách dùng và ý nghĩa</th></tr><tr><td>Kiểm tra</td><td>Xác thực phiên đăng nhập; đọc thông báo riêng về phiên và việc lấy hạn mức</td></tr><tr><td>Hạn mức</td><td>Truy vấn hạn mức của đúng tài khoản; chú ý thời điểm truy vấn và cảnh báo dữ liệu cũ</td></tr><tr><td>Duy trì phiên</td><td>Yêu cầu làm mới phiên/đánh thức môi trường Muse của tài khoản</td></tr><tr><td>Duy trì phiên tất cả tài khoản</td><td>Thực hiện cho cả nhóm theo cơ chế bảo trì</td></tr><tr><td>Bật / Tắt</td><td>Cho phép hoặc ngừng dùng tài khoản để xử lý tác vụ mới</td></tr><tr><td>Đổi tên</td><td>Đặt nhãn dễ nhận biết</td></tr><tr><td>Cập nhật Cookie</td><td>Nhập phiên mới cho tài khoản đang có</td></tr><tr><td>Xóa</td><td>Xóa tài khoản khỏi nhóm; kiểm tra kỹ trước khi xác nhận</td></tr></table></div>
+<p><strong>Khả dụng</strong> là kết quả đã xác nhận gần nhất, không bảo đảm mạng luôn thông suốt. <strong>Chưa kiểm tra</strong> nghĩa là chưa có xác nhận. <strong>Lỗi</strong> cần đọc ghi chú để biết nguyên nhân. <strong>Đã tắt</strong> không tham gia phân phối tác vụ mới.</p>
+<p>Thời hạn cookie không chứng minh phiên vẫn được máy chủ Muse chấp nhận. Nếu đọc hạn mức thất bại, hệ thống có thể giữ số liệu cũ; đừng coi số liệu đó là số dư hiện tại. Di chuột lên ghi chú để xem lỗi đầy đủ.</p>
+<p>Dịch vụ có vòng bảo trì nền mỗi 30 phút; việc gia hạn phụ thuộc phản hồi thực tế của Muse. Giữ dịch vụ chạy nếu muốn vòng bảo trì hoạt động. Tài khoản đã tắt không được tự bảo trì theo cấu hình mặc định.</p>
+<h2 id="section-54">7. Tạo ảnh và video đơn lẻ</h2>
+<figure><img alt="Màn hình thử tạo ảnh và video" src="images/03-thu-api.png"></figure>
+<p><em>Hình 3. Hai biểu mẫu tạo nội dung trong thẻ Thử API.</em></p>
+<h3 id="section-57">7.1. Tạo ảnh</h3>
+<ol><li>Kiểm tra có ít nhất một tài khoản bật và dùng được.</li><li>Vào <strong>Thử API → Thử tạo ảnh</strong>.</li><li>Nhập mô tả chi tiết: chủ thể, bối cảnh, ánh sáng, phong cách, bố cục.</li><li>Chọn tỷ lệ: <code>1:1</code> cho ảnh vuông, <code>16:9</code> cho ảnh ngang, <code>9:16</code> cho ảnh dọc; giao diện còn có <code>4:3</code> và <code>3:4</code>.</li><li>Bấm <strong>Bắt đầu tạo ảnh</strong> một lần rồi đợi kết quả. Trang dùng tác vụ và tự kiểm tra trạng thái.</li><li>Xem ảnh trả về, tải ảnh hoặc vào <strong>Thư viện media</strong> để tìm lại.</li></ol>
+<p>Prompt mẫu: “Một căn nhà gỗ bên hồ vào bình minh, sương nhẹ, ánh sáng ấm, phong cách ảnh chụp, bố cục rộng 16:9.”</p>
+<h3 id="section-60">7.2. Tạo video</h3>
+<ol><li>Trong cùng thẻ, tìm <strong>Thử tạo video</strong>.</li><li>Nhập chủ thể và hành động, chuyển động camera, bối cảnh và ánh sáng.</li><li>Chọn thời lượng yêu cầu và tỷ lệ. Các lựa chọn thời lượng trong chạy hàng loạt là 5, 6, 8 hoặc 10 giây.</li><li>Bấm <strong>Bắt đầu tạo video</strong>, đợi tiến độ và kết quả.</li><li>Xem trước rồi tải video về máy.</li></ol>
+<p>Prompt mẫu: “Một chú mèo cam đi chậm trên bãi cỏ, camera theo sát ngang tầm mắt, ánh sáng buổi sáng, chuyển động tự nhiên, khung hình 16:9.”</p>
+<p>Thời lượng là yêu cầu gửi đến Muse; thời lượng thực tế phụ thuộc kết quả của Muse. Tiến độ là chỉ báo xử lý, không phải cam kết thời điểm hoàn tất. Độ trễ thay đổi theo hàng đợi, mạng và tài khoản; tránh bấm tạo nhiều lần khi yêu cầu đang chạy.</p>
+<h2 id="section-64">8. Chạy hàng loạt</h2>
+<figure><img alt="Màn hình chạy hàng loạt" src="images/04-hang-loat.png"></figure>
+<p><em>Hình 4. Thiết lập loại nội dung, tỷ lệ, mức đồng thời, prompt và nơi lưu.</em></p>
+<h3 id="section-67">8.1. Chuẩn bị danh sách</h3>
+<ol><li>Vào <strong>Chạy hàng loạt</strong>.</li><li>Chọn <strong>Ảnh</strong> hoặc <strong>Video</strong>. Chọn tỷ lệ và thời lượng nếu tạo video.</li><li>Đặt số tác vụ đồng thời. Với tài khoản mới hoặc máy yếu, bắt đầu bằng 1–2.</li><li>Dán prompt, <strong>mỗi dòng một prompt</strong>. Dòng trống được bỏ qua; prompt bị xuống dòng sẽ trở thành nhiều tác vụ riêng.</li><li>Chọn thư mục tải xuống trước khi chạy nếu muốn tự lưu kết quả.</li><li>Bấm <strong>Chạy N prompt</strong> và giữ trang mở để tiếp tục gửi những dòng đang chờ.</li></ol>
+<pre><code data-language="text">Một căn nhà gỗ bên hồ lúc bình minh, ánh sáng ấm
+Một khu rừng thông trong sương sớm, camera tiến chậm
+Một con phố tương lai ban đêm, ánh đèn neon phản chiếu trên mặt đường</code></pre>
+<h3 id="section-70">8.2. Chọn nơi lưu kết quả</h3>
+<p><strong>Chọn thư mục tải xuống</strong> cho phép trình duyệt xin quyền ghi vào thư mục bạn chọn. Trên Chrome/Edge, tính năng chọn thư mục trực tiếp cần localhost hoặc HTTPS. Khi đã chọn và có quyền ghi, kết quả được tự lưu vào đó.</p>
+<p>Nếu không chọn thư mục, dùng <strong>Tải xuống</strong> ở từng kết quả và cài đặt tải xuống của trình duyệt. Khi truy cập máy chủ khác bằng HTTP, có thể bật tùy chọn trình duyệt hỏi nơi lưu từng tệp. Sau F5, hãy kiểm tra trạng thái quyền thư mục và cấp lại nếu trình duyệt yêu cầu.</p>
+<h3 id="section-73">8.3. Giới hạn đồng thời</h3>
+<p>Số thực thi phụ thuộc đồng thời vào lựa chọn giao diện, giới hạn toàn dịch vụ <code>MUSE2API_CONCURRENCY</code>, giới hạn mỗi tài khoản <code>MUSE2API_PER_ACCOUNT</code> và số tài khoản dùng được. Ví dụ: đặt toàn dịch vụ là 4, mỗi tài khoản là 2, có một tài khoản thì tối đa 2 tác vụ sử dụng tài khoản đó cùng lúc; hai tài khoản có thể đạt 4 nếu đều sẵn sàng.</p>
+<p>Ảnh bất đồng bộ còn có giới hạn riêng: tối đa 8 tác vụ ảnh chưa kết thúc trong một tiến trình. Khi nhận 429 do đầy hàng đợi, chờ bớt tác vụ kết thúc rồi thử lại. Tăng số tác vụ không bảo đảm tăng tốc và có thể làm máy thiếu bộ nhớ hoặc gặp hạn chế phía Muse.</p>
+<h3 id="section-76">8.4. Dừng và tải lại trang</h3>
+<p><strong>Dừng gửi thêm</strong> dừng gửi các dòng còn lại; những tác vụ đã gửi vẫn chạy. Giữ máy chủ hoạt động để chúng hoàn tất. Sau F5, giao diện khôi phục danh sách đã lưu trong trình duyệt, lấy trạng thái tác vụ đã gửi và cập nhật khoảng mỗi 4 giây. Khôi phục danh sách không có nghĩa là gửi lại prompt.</p>
+<p>STT cộng dồn qua nhiều đợt. Dùng cùng trình duyệt và cùng địa chỉ trang để tiếp tục danh sách cũ; chuyển trình duyệt, đổi địa chỉ hoặc xóa dữ liệu trình duyệt có thể khiến danh sách cục bộ không còn xuất hiện.</p>
+<h2 id="section-79">9. Khôi phục tác vụ và tải kết quả</h2>
+<div class="table-wrap"><table><tr><th>Nút</th><th>Khi nên sử dụng</th></tr><tr><td>Chạy lại prompt chưa gửi</td><td>Gửi các dòng chắc chắn chưa có mã tác vụ</td></tr><tr><td>Lấy file đã render</td><td>Thử thu hồi kết quả đã tạo trên Muse cho dòng lỗi</td></tr><tr><td>Nối lại bị ngắt</td><td>Mở lại cuộc trò chuyện cũ để lấy video sau khi dịch vụ bị gián đoạn</td></tr><tr><td>Tải toàn bộ video chưa tải</td><td>Lưu video hoàn tất nhưng chưa tải/lưu trên máy bạn</td></tr><tr><td>Tạo lại prompt lỗi</td><td>Thử lại nhóm lỗi; việc tạo mới có thể tiêu hao thêm hạn mức</td></tr><tr><td>Tạo lại tất cả</td><td>Thử lại cả danh sách theo cơ chế xử lý của giao diện</td></tr><tr><td>Sửa prompt</td><td>Sửa nội dung rồi gửi lại; xem là yêu cầu mới</td></tr><tr><td>Xóa đã xong</td><td>Dọn dòng thành công đã tải/lưu xong</td></tr><tr><td>Xóa toàn bộ</td><td>Xóa danh sách và reset STT khi đủ điều kiện; tệp đã lưu vẫn được giữ</td></tr></table></div>
+<p>Khi tác vụ báo lỗi nhưng có khả năng Muse đã tạo xong, thử <strong>Lấy file đã render</strong> hoặc <strong>Nối lại bị ngắt</strong> trước. Việc thu hồi phụ thuộc cuộc trò chuyện và phiên tài khoản còn truy cập được. Đừng gửi lại ngay chỉ vì mất kết nối: yêu cầu cũ có thể vẫn đang chạy.</p>
+<p>Nếu hiện trạng thái gửi chưa được xác nhận, giữ dòng đó để đối chiếu <strong>Lịch sử tác vụ</strong>. Chỉ chạy prompt chưa gửi khi chắc chắn chưa có tác vụ. Khi reset STT và tên tệp bị trùng, cơ chế lưu của giao diện thêm hậu tố để tránh ghi đè.</p>
+<h2 id="section-83">10. Lịch sử tác vụ và thư viện media</h2>
+<p><strong>Lịch sử tác vụ</strong> hiển thị ID, loại nội dung, prompt, trạng thái, thời gian và kết quả/lỗi. Dùng <strong>Làm mới</strong> khi cần kiểm tra lại. Ghi lại ID nếu cần tra cứu hoặc báo lỗi.</p>
+<div class="table-wrap"><table><tr><th>Trạng thái API</th><th>Ý nghĩa</th></tr><tr><td>queued</td><td>Đã nhận và chờ xử lý</td></tr><tr><td>processing</td><td>Đang thực hiện</td></tr><tr><td>completed</td><td>Đã hoàn tất, đọc URL kết quả</td></tr><tr><td>failed</td><td>Có lỗi, đọc trường error</td></tr></table></div>
+<p>API video hiện tại trả trạng thái hoàn tất là <code>completed</code>; không chỉ chờ <code>succeeded</code> như một số ví dụ README cũ.</p>
+<p><strong>Thư viện media</strong> chứa ảnh/video đã lưu trên máy chủ, trong <code>data/media</code>. Tệp trên máy chủ và tệp tải về máy khách là hai bản riêng. Có thể xem trước, tải về và dùng liên kết kết quả. Chỉ chọn <strong>Xóa mục đã chọn</strong> khi thật sự muốn xóa tệp media trên máy chủ; đường dẫn tới tệp bị xóa sẽ không còn dùng được.</p>
+<p>Xóa dòng ở danh sách chạy hàng loạt khác với xóa media. Việc dọn danh sách không tự xóa tệp đã tải. Hãy lưu kết quả quan trọng trước khi dọn lịch sử hoặc tệp trên máy chủ.</p>
+<h2 id="section-89">11. Kết nối ứng dụng và gọi API</h2>
+<h3 id="section-90">11.1. Ba giá trị cần điền</h3>
+<div class="table-wrap"><table><tr><th>Trường</th><th>Giá trị</th></tr><tr><td>Base URL</td><td>http://localhost:18610/v1</td></tr><tr><td>API Key</td><td>Khóa thật đang có hiệu lực của dịch vụ</td></tr><tr><td>Model hội thoại</td><td>muse-spark</td></tr><tr><td>Model ảnh</td><td>muse-image</td></tr><tr><td>Model video</td><td>muse-video</td></tr></table></div>
+<p><code>localhost</code> luôn là máy đang chạy ứng dụng gọi API. Nếu ứng dụng ở máy khác, dùng IP/tên miền của máy chủ thay cho localhost. Nếu ứng dụng tự thêm <code>/v1</code>, làm theo cách cấu hình của ứng dụng để tránh <code>/v1/v1</code>.</p>
+<p>Tương thích giao thức không có nghĩa là có mọi chức năng của OpenAI. Cơ chế công cụ/function calling mặc định tắt; không nên dựa vào dịch vụ này cho luồng bắt buộc gọi công cụ.</p>
+<h3 id="section-94">11.2. Gọi hội thoại bằng PowerShell</h3>
+<p>Các ví dụ sau dùng cùng cửa sổ PowerShell. Nhập khóa bằng <code>Read-Host</code> để không ghi khóa trực tiếp trong lệnh mẫu:</p>
+<pre><code data-language="powershell">$base = &#x27;http://localhost:18610&#x27;
+$apiKey = Read-Host &#x27;Nhap MUSE2API_KEY&#x27;
+$headers = @{ Authorization = &quot;Bearer $apiKey&quot; }
+
+Invoke-RestMethod -Uri &quot;$base/v1/models&quot; -Headers $headers
+
+$body = @{
+    model = &#x27;muse-spark&#x27;
+    messages = @(
+        @{ role = &#x27;system&#x27;; content = &#x27;Tra loi bang tieng Viet.&#x27; }
+        @{ role = &#x27;user&#x27;; content = &#x27;Giai thich ngan gon API la gi.&#x27; }
+    )
+    stream = $false
+} | ConvertTo-Json -Depth 10
+
+$chat = Invoke-RestMethod -Method Post -Uri &quot;$base/v1/chat/completions&quot; `
+    -Headers $headers -ContentType &#x27;application/json; charset=utf-8&#x27; `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 360
+$chat.choices[0].message.content</code></pre>
+<h3 id="section-97">11.3. Tạo ảnh bằng tác vụ bất đồng bộ</h3>
+<p>Nên dùng tạo tác vụ rồi kiểm tra trạng thái, đặc biệt khi đi qua reverse proxy/CDN. Khóa idempotency giúp cùng một nội dung và cùng khóa trả về tác vụ cũ thay vì tạo ảnh trùng.</p>
+<pre><code data-language="powershell">$imageBody = @{
+    model = &#x27;muse-image&#x27;
+    prompt = &#x27;A wooden house beside a lake at sunrise, warm light&#x27;
+    size = &#x27;16:9&#x27;
+    response_format = &#x27;url&#x27;
+} | ConvertTo-Json
+$imageHeaders = @{
+    Authorization = &quot;Bearer $apiKey&quot;
+    &#x27;Idempotency-Key&#x27; = [guid]::NewGuid().ToString()
+}
+$task = Invoke-RestMethod -Method Post -Uri &quot;$base/v1/images/tasks&quot; `
+    -Headers $imageHeaders -ContentType &#x27;application/json&#x27; -Body $imageBody
+$task.id
+
+# Chay lai lenh GET nay moi 3-4 giay; dung khi completed hoac failed.
+$state = Invoke-RestMethod -Uri &quot;$base/v1/images/tasks/$($task.id)&quot; -Headers $headers
+$state | ConvertTo-Json -Depth 10
+
+# Chi tai sau khi status la completed.
+if ($state.status -eq &#x27;completed&#x27;) {
+    $url = $state.url
+    if (-not $url) { $url = $state.data[0].url }
+    Invoke-WebRequest -Uri $url -OutFile &#x27;.\ket-qua-anh.webp&#x27;
+}</code></pre>
+<p>Nếu POST bị ngắt và chưa nhận được ID, thử lại <strong>cùng</strong> <code>$imageHeaders</code> và <strong>cùng</strong> nội dung. Không sinh khóa idempotency mới cho lần thử lại đó. Cùng khóa nhưng nội dung khác trả 409. Khi GET lỗi, thử lại GET; không POST lại tác vụ đã có ID.</p>
+<h3 id="section-101">11.4. Tạo video và kiểm tra trạng thái</h3>
+<pre><code data-language="powershell">$videoBody = @{
+    model = &#x27;muse-video&#x27;
+    prompt = &#x27;An orange kitten walking on grass, smooth tracking camera&#x27;
+    duration = 6
+    size = &#x27;16:9&#x27;
+} | ConvertTo-Json
+$videoTask = Invoke-RestMethod -Method Post -Uri &quot;$base/v1/videos&quot; `
+    -Headers $headers -ContentType &#x27;application/json&#x27; -Body $videoBody
+$videoTask.id
+
+# Kiem tra lai moi 3-4 giay cho den trang thai cuoi.
+$videoState = Invoke-RestMethod -Uri &quot;$base/v1/videos/$($videoTask.id)&quot; -Headers $headers
+$videoState | ConvertTo-Json -Depth 10
+if ($videoState.status -eq &#x27;completed&#x27;) {
+    Invoke-WebRequest -Uri $videoState.url -OutFile &#x27;.\ket-qua-video.mp4&#x27;
+}</code></pre>
+<h3 id="section-103">11.5. Dùng ảnh tham chiếu</h3>
+<p>Trong JSON tạo tác vụ ảnh hoặc tạo video, thêm <code>reference_image</code> là URL HTTP(S) mà máy chủ đọc được, hoặc Data URL của ảnh. Để dùng ảnh trên máy Windows:</p>
+<pre><code data-language="powershell">$imageBytes = [System.IO.File]::ReadAllBytes(&#x27;F:\Anh\tham-chieu.png&#x27;)
+$reference = &#x27;data:image/png;base64,&#x27; + [Convert]::ToBase64String($imageBytes)
+# Them reference_image = $reference vao hashtable truoc ConvertTo-Json.</code></pre>
+<p>Với JPEG, dùng MIME <code>image/jpeg</code>. Gửi đường dẫn <code>F:\Anh\...</code> trực tiếp trong <code>reference_image</code> không thay thế việc tải ảnh lên. Prompt nên mô tả phần cần giữ và phần cần thay đổi. Video dùng ảnh tham chiếu như yêu cầu ảnh đầu vào/khung hình đầu, nhưng kết quả vẫn phụ thuộc Muse.</p>
+<h3 id="section-107">11.6. Các endpoint chính</h3>
+<div class="table-wrap"><table><tr><th>Phương thức và đường dẫn</th><th>Công dụng</th></tr><tr><td>GET /v1/models</td><td>Danh sách model</td></tr><tr><td>POST /v1/chat/completions</td><td>Hội thoại, hỗ trợ stream</td></tr><tr><td>POST /v1/responses</td><td>Giao thức Responses</td></tr><tr><td>POST /v1/images/tasks</td><td>Tạo tác vụ ảnh, trả HTTP 202</td></tr><tr><td>GET /v1/images/tasks/{id}</td><td>Kiểm tra tác vụ ảnh</td></tr><tr><td>POST /v1/images/generations</td><td>Tạo ảnh đồng bộ; có thể gửi async=true</td></tr><tr><td>POST /v1/images/edits</td><td>Chỉnh ảnh, JSON hoặc multipart; có thể gửi async=true</td></tr><tr><td>POST /v1/videos</td><td>Tạo tác vụ video</td></tr><tr><td>GET /v1/videos/{id}</td><td>Kiểm tra tác vụ video</td></tr><tr><td>GET /v1/media/{filename}</td><td>Lấy tệp kết quả</td></tr></table></div>
+<p>Các endpoint nghiệp vụ cần <code>Authorization: Bearer &lt;khóa&gt;</code>. <code>/healthz</code>, <code>/readyz</code> và <code>/v1/media/*</code> không cần khóa; người có URL media có thể truy cập tệp khi dịch vụ được công khai.</p>
+<h2 id="section-110">12. Cấu hình nâng cao</h2>
+<div class="table-wrap"><table><tr><th>Biến</th><th>Tác dụng / giá trị trong mã nguồn hiện tại</th></tr><tr><td>MUSE2API_KEY</td><td>Khóa quản trị và API; phải thay giá trị mẫu</td></tr><tr><td>MUSE2API_HOST</td><td>Mã nguồn mặc định 0.0.0.0; cấu hình Windows mới do launcher tạo dùng 127.0.0.1</td></tr><tr><td>MUSE2API_PORT</td><td>Cổng HTTP, mặc định 18610</td></tr><tr><td>MUSE2API_CHROMIUM</td><td>Đường dẫn Chrome/Edge/Chromium; để trống để tự dò</td></tr><tr><td>MUSE2API_CDP_PORT</td><td>Cổng điều khiển trình duyệt nội bộ, mặc định 19210</td></tr><tr><td>MUSE2API_CONCURRENCY</td><td>Giới hạn toàn hệ thống; mã nguồn và Compose mặc định 8; launcher tạo .env mới đặt 10</td></tr><tr><td>MUSE2API_PER_ACCOUNT</td><td>Giới hạn mỗi tài khoản; mã nguồn và Compose mặc định 30; launcher tạo .env mới đặt 5</td></tr><tr><td>MUSE2API_IMAGE_TIMEOUT</td><td>Ngân sách chờ tạo ảnh mặc định 240 giây</td></tr><tr><td>MUSE2API_VIDEO_TIMEOUT</td><td>Thời gian chờ video mặc định 600 giây</td></tr><tr><td>MUSE2API_CHAT_TIMEOUT</td><td>Thời gian chờ hội thoại mặc định 300 giây</td></tr><tr><td>MUSE2API_PUBLIC_BASE</td><td>Địa chỉ công khai gốc, ví dụ https://muse.example.com</td></tr><tr><td>MUSE2API_PROFILE_ROOT</td><td>Nơi lưu profile trình duyệt; launcher ưu tiên browser-profiles cạnh dự án nếu chưa cấu hình</td></tr><tr><td>MUSE2API_KEEPALIVE_DISABLED_ACCOUNTS</td><td>0 mặc định; 1 cho phép bảo trì tài khoản đã tắt</td></tr><tr><td>MUSE2API_SESSION_VIEW_TTL</td><td>Thời gian giữ phiên xem tác vụ, mặc định 120 giây</td></tr><tr><td>MUSE2API_SESSION_VIEW_MAX_RETAINED</td><td>Số phiên xem được giữ, mặc định 2</td></tr></table></div>
+<p>Giá trị thực tế là cấu hình có hiệu lực lúc chạy; README và Windows quickstart cũ có thể mô tả mặc định khác. Với ảnh bất đồng bộ, trường <code>timeout</code> nhận từ 1 đến 600 giây cho ngân sách chờ; khởi tạo trình duyệt và lấy kết quả còn có thời gian chờ riêng.</p>
+<h2 id="section-113">13. Docker và truy cập từ máy khác</h2>
+<h3 id="section-114">13.1. Docker Compose</h3>
+<p>Tại thư mục dự án, cấu hình khóa trong <code>.env</code> rồi chạy:</p>
+<pre><code data-language="powershell">docker compose up -d --build
+docker compose logs -f muse2api</code></pre>
+<p>Mở <code>http://localhost:18610/admin</code>, nhập khóa và nhập tài khoản như các mục trên. Compose hiện tại gắn <code>./data</code> vào <code>/app/data</code>. Không chạy bản Windows và Docker trên cùng cổng 18610 cùng lúc.</p>
+<p>File Compose hiện tại đặt <code>MUSE2API_PUBLIC_BASE</code> là chuỗi rỗng và đặt trực tiếp các timeout. Muốn đổi các giá trị đó trong container, chỉnh mục <code>environment</code> của <code>docker-compose.yml</code>; chỉ sửa <code>.env</code> chưa đủ nếu Compose không tham chiếu biến đó. Sau sửa, chạy lại <code>docker compose up -d --build</code>.</p>
+<h3 id="section-119">13.2. Cho máy khác trong LAN truy cập</h3>
+<ol><li>Đặt <code>MUSE2API_HOST=0.0.0.0</code>, lưu <code>.env</code> và khởi động lại bản Windows.</li><li>Lấy IP LAN của máy chủ bằng <code>ipconfig</code>, ví dụ <code>192.168.1.50</code>.</li><li>Cho phép cổng dịch vụ trong Windows Firewall trên mạng bạn cần dùng.</li><li>Máy khác mở <code>http://192.168.1.50:18610/admin</code>.</li><li>Ứng dụng dùng <code>http://192.168.1.50:18610/v1</code>; tiện ích dùng địa chỉ gốc không có <code>/v1</code>.</li></ol>
+<p>Không điền <code>0.0.0.0</code> làm địa chỉ kết nối của máy khách. Không mở cổng CDP 19210 ra Internet. Nếu công khai dịch vụ, dùng khóa riêng và HTTPS; đặt <code>MUSE2API_PUBLIC_BASE</code> thành tên miền gốc để URL kết quả dùng được từ máy khách.</p>
+<h3 id="section-122">13.3. Khi có Nginx/reverse proxy</h3>
+<p>Cấu hình mẫu nằm ở <code>deploy/nginx.example.conf</code>. Các điểm chính cho tạo nội dung lâu và hội thoại streaming:</p>
+<pre><code data-language="nginx">proxy_read_timeout 600s;
+proxy_send_timeout 600s;
+proxy_buffering off;
+client_max_body_size 64M;</code></pre>
+<p>Đây là các chỉ thị bên trong cấu hình location phù hợp, không phải toàn bộ file Nginx. Nếu CDN có giới hạn chờ riêng, dùng API ảnh bất đồng bộ để POST ngắn và kiểm tra trạng thái.</p>
+<h2 id="section-126">14. Sao lưu, cập nhật và dừng dịch vụ</h2>
+<h3 id="section-127">14.1. Dừng / chạy lại</h3>
+<p>Với Windows, nhấn <code>Ctrl+C</code> trong terminal để dừng, rồi chạy lại <code>START.bat</code>. Chờ tác vụ đang chạy kết thúc và tải kết quả quan trọng trước khi dừng chủ động. Tác vụ ảnh chưa hoàn tất khi tiến trình khởi động lại bị đánh dấu thất bại; nó không tự tạo lại ảnh.</p>
+<p>Với Docker, dùng <code>docker compose stop</code> để dừng và <code>docker compose up -d</code> để chạy lại.</p>
+<h3 id="section-130">14.2. Sao lưu</h3>
+<p>Dừng dịch vụ rồi sao chép <code>.env</code>, <code>data/</code> và thư mục profile thực tế (thường là <code>browser-profiles/</code> khi chạy qua launcher) vào nơi riêng. <code>data/</code> chứa tài khoản, lịch sử và media; bảo vệ bản sao lưu như dữ liệu đăng nhập. Không cần sao lưu <code>.venv</code> hoặc <code>.pip-cache</code> nếu chỉ muốn giữ cấu hình và kết quả.</p>
+<h3 id="section-132">14.3. Cập nhật</h3>
+<p>Trang quản trị có thể hiển thị thông báo phiên bản mới và nút cập nhật. Chỉ cập nhật khi đã sao lưu và không còn tác vụ quan trọng đang chạy. Máy đang có thay đổi mã nguồn riêng cần giữ lại thay đổi trước khi lấy bản mới; không thay toàn bộ thư mục bằng gói mới rồi làm mất dữ liệu.</p>
+<p>Với bản Git sạch, có thể dùng <code>git pull --ff-only</code> rồi khởi động lại. Với Docker, sau khi lấy mã mới chạy <code>docker compose up -d --build</code>. Với gói Windows giải nén, giữ <code>.env</code>, <code>data/</code> và profile khi thay mã nguồn. Sau cập nhật, mở lại trang, xác nhận cấu hình và kiểm tra một tài khoản.</p>
+<h2 id="section-135">15. Khắc phục sự cố</h2>
+<div class="table-wrap"><table><tr><th>Hiện tượng</th><th>Kiểm tra / cách xử lý</th></tr><tr><td>START.bat báo thiếu Python</td><td>Kiểm tra Python 3.10+; thử py -3 --version; cài Python nếu chưa có</td></tr><tr><td>Không tìm thấy trình duyệt</td><td>Cài Chrome/Edge hoặc đặt đúng MUSE2API_CHROMIUM; kiểm tra file thực sự tồn tại</td></tr><tr><td>Port 18610 is already in use</td><td>Dừng phiên dịch vụ cũ; hoặc đổi MUSE2API_PORT rồi cập nhật địa chỉ trong tiện ích/ứng dụng</td></tr><tr><td>Không mở được /admin</td><td>Kiểm tra terminal còn chạy, đúng cổng, đúng IP; máy khác cần host 0.0.0.0 và quyền firewall</td></tr><tr><td>API trả 401</td><td>Đối chiếu khóa dịch vụ; lưu khóa mới trong trang và cập nhật tiện ích/ứng dụng; khóa mẫu không phải khóa riêng</td></tr><tr><td>Tiện ích không có cookie</td><td>Đăng nhập Muse trong đúng trình duyệt; dùng tiện ích để đọc HttpOnly; kiểm tra đúng tài khoản</td></tr><tr><td>Tiện ích Failed to fetch</td><td>Kiểm tra dịch vụ đang chạy, địa chỉ, HTTPS/chứng chỉ và quyền tiện ích; thử mở địa chỉ quản trị trực tiếp</td></tr><tr><td>Không có tài khoản khả dụng</td><td>Nhập tài khoản, bật tài khoản và bấm Kiểm tra; xem cookie, hạn mức và ghi chú</td></tr><tr><td>Muse /api/session trả 401</td><td>Phiên bị Muse từ chối; đăng nhập lại trên Muse rồi nhập cookie mới</td></tr><tr><td>Muse trả 403</td><td>Xem quyền tài khoản, mạng/địa chỉ ra Internet của máy chủ và giới hạn truy cập; không kết luận ngay là cookie hết hạn</td></tr><tr><td>Muse trả 429</td><td>Chờ, giảm mức đồng thời; phân biệt hạn chế Muse với hàng đợi ảnh của dịch vụ đã đầy</td></tr><tr><td>Hạn mức đứng yên hoặc có dữ liệu cũ</td><td>Xem thời điểm truy vấn; bấm Hạn mức và đọc lỗi; dữ liệu cache không phải số dư mới</td></tr><tr><td>Ảnh/video chậm hoặc timeout</td><td>Giảm đồng thời, kiểm tra mạng, xem ID và lỗi tác vụ; kiểm tra kết quả đã render trước khi tạo lại</td></tr><tr><td>502/504 sau reverse proxy</td><td>Kiểm tra timeout proxy; với ảnh chuyển sang POST tác vụ + GET trạng thái</td></tr><tr><td>Không chọn được thư mục lưu</td><td>Dùng Chrome/Edge trên localhost/HTTPS; cấp quyền ghi hoặc tải theo cơ chế trình duyệt</td></tr><tr><td>F5 mất danh sách batch</td><td>Kiểm tra cùng trình duyệt và cùng địa chỉ; tìm tác vụ đã gửi trong Lịch sử tác vụ thay vì tạo lại ngay</td></tr><tr><td>Link media không mở ở máy khác</td><td>Link localhost trỏ về máy khách; cấu hình PUBLIC_BASE đúng IP/tên miền và kiểm tra tệp còn tồn tại</td></tr><tr><td>Streaming chỉ hiện khi kết thúc</td><td>Tắt proxy_buffering và kiểm tra ứng dụng có xử lý SSE</td></tr></table></div>
+<p>Khi cần báo lỗi, ghi lại phiên bản, Windows/Docker, thời gian, ID tác vụ, HTTP status, thao tác đã làm và thông báo đầy đủ. Che khóa, cookie và URL có <code>key</code> trước khi gửi ảnh hoặc log.</p>
+<h3 id="section-138">Kiểm tra hoàn thành lần cài đầu</h3>
+<ul><li>Dịch vụ khởi động được và <code>/admin</code> mở bình thường.</li><li>Đã thay khóa mẫu bằng khóa riêng.</li><li>Ít nhất một tài khoản đã bật và kiểm tra thành công.</li><li>Đã tạo thử một ảnh hoặc video và tải kết quả về máy.</li><li>Nếu dùng batch, đã thử một danh sách ngắn và xác nhận nơi lưu.</li><li>Nếu tích hợp ứng dụng, đã kiểm tra BASE URL, API Key và model.</li></ul>
+<h3 id="section-140">Tệp tham chiếu trong dự án</h3>
+<p>Nội dung đối chiếu từ <code>config.py</code>, <code>launch.py</code>, <code>START.bat</code>, <code>app.py</code>, <code>admin.html</code>, <code>extension/popup.html</code>, <code>extension/popup.js</code>, <code>docker-compose.yml</code> và <code>version.json</code> của bản mã hiện có.</p></main></body></html>

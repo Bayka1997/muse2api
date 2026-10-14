@@ -151,8 +151,46 @@ def test_parallel_generation_simulation():
     print("PASS: test_parallel_generation_simulation")
 
 
+def test_rendered_video_harvest_uses_processing_start():
+    now = time.time()
+    task = {
+        "id": "harvest-regression",
+        "kind": "video",
+        "status": "processing",
+        "muse_url": "https://muse.ai/thread/fixture",
+        "account": "account-fixture",
+        "processing_started_at": now - 60,
+        "updated_at": now,
+    }
+    app._HARVEST_NEXT.pop(task["id"], None)
+    try:
+        assert app._harvest_ready(task, now), "progress updates must not postpone harvest"
+        task["processing_started_at"] = now - 30
+        assert not app._harvest_ready(task, now), "recently started generations are not harvested"
+        task["status"] = "failed"
+        task["processing_started_at"] = now - 60
+        assert app._harvest_ready(task, now), "failed tasks should recover an already-rendered video"
+    finally:
+        app._HARVEST_NEXT.pop(task["id"], None)
+    print("PASS: rendered video harvest uses processing start")
+
+
+def test_automatic_rendered_harvest_allows_page_to_load():
+    account = {"id": "account-fixture"}
+    calls = []
+    task = {"kind": "video", "account": account["id"]}
+    with patch.object(app, "_collect_accounts", return_value=[account]), \
+         patch.object(app, "_collect_from_account",
+                      side_effect=lambda *args, **kwargs: calls.append(kwargs) or {"filename": "clip.mp4"}):
+        app._download_rendered(task, "https://muse.ai/thread/fixture", quick=True)
+    assert calls and calls[0]["timeout"] == 60, calls
+    print("PASS: automatic rendered-video harvest has a full page-load window")
+
+
 if __name__ == "__main__":
     test_concurrency_lock()
     test_account_pool_manager()
     test_parallel_generation_simulation()
+    test_rendered_video_harvest_uses_processing_start()
+    test_automatic_rendered_harvest_allows_page_to_load()
     print("ALL CONCURRENCY TESTS PASSED!")

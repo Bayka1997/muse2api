@@ -6,6 +6,9 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
+.pip-cache/
+browser-profiles/
 ENV/
 build/
 develop-eggs/

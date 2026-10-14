@@ -55,6 +55,9 @@ def _detect_chromium() -> str:
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        os.path.expanduser("~/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
     ]
     for c in candidates:
         if os.path.isfile(c) or shutil.which(c):
@@ -104,6 +107,8 @@ class Config:
     video_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_VIDEO_TIMEOUT", "600")))
     chat_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_CHAT_TIMEOUT", "300")))
     max_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_CONCURRENCY", "8"))))
+    session_view_ttl: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_SESSION_VIEW_TTL", "120"))))
+    session_view_max_retained: int = field(default_factory=lambda: max(0, int(_env("MUSE2API_SESSION_VIEW_MAX_RETAINED", "2"))))
     # Mỗi cookie giữ tối đa từng này video. Batch UI chia tổng đã chọn đều cho các cookie.
     per_account_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_PER_ACCOUNT", "30"))))
 

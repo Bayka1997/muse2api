@@ -51,6 +51,25 @@ def main():
     engine_module.time.sleep = lambda _seconds: None
     try:
         with tempfile.TemporaryDirectory() as tmp:
+            engine, _ = engine_for(tmp)
+            engine.bind_task_view = lambda: None
+            engine.reset_thread = lambda **kwargs: None
+            engine._clear_attachments = lambda: None
+            engine._agent_count = lambda: 0
+            engine._send = lambda prompt: "clicked"
+            engine._wait_attachment = lambda *args, **kwargs: None
+            thread = "https://muse.ai/thread/fixture"
+            engine.generation_context = lambda: {"muse_url": thread}
+            recovered = {"filename": "rendered.mp4", "kind": "video"}
+            calls = []
+            engine.collect_rendered = lambda *args, **kwargs: calls.append((args, kwargs)) or recovered
+            result = engine.generate({"hatch_sess": "secret"}, "fixture prompt",
+                                     expect="video", timeout=60, account_id="account-b")
+            assert result is recovered
+            assert calls and calls[0][0][1] == thread
+            assert calls[0][1]["timeout"] == 60
+
+        with tempfile.TemporaryDirectory() as tmp:
             engine, page = engine_for(tmp)
             calls = {"n": 0}
 
@@ -155,10 +174,12 @@ def main():
 
             engine.attachments = lambda: [{
                 "tid": "hatch-chat-attachment-presentation-video", "hasVideo": True,
-                "src": "blob:https://muse.ai/page", "vSrc": "blob:https://muse.ai/page",
+                "src": "https://cdn.example/square-render.mp4",
+                "vSrc": "https://cdn.example/square-render.mp4",
                 "w": 480, "h": 480,
             }]
-            assert engine._rendered_media("video") is None
+            picked = engine._rendered_media("video")
+            assert picked and picked["w"] == 480 and picked["h"] == 480, picked
             engine.attachments = lambda: [{
                 "tid": "hatch-chat-attachment-presentation-video", "hasVideo": True,
                 "src": "blob:https://muse.ai/scene", "vSrc": "blob:https://muse.ai/scene",

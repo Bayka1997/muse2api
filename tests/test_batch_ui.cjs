@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const html = fs.readFileSync(path.join(__dirname, '..', 'admin.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1]
-  .replace(/\nrefreshAll\(\);\nsetInterval/, '\nsetInterval');
+  .replace(/\r?\nrefreshAll\(\);\r?\nsetInterval/, '\nsetInterval');
 
 let sharedFolderDb = null;
 function memoryFolderDb(){
@@ -73,6 +73,105 @@ const ok = body => ({status:200,body});
 const complete = id => ({id,status:'completed',progress:100,data:[{url:'/v1/media/'+id+'.webp'}]});
 
 async function main() {
+  {
+    let posts=0, collections=0;
+    const auto=setup(async(url,opts)=>{
+      if (url.endsWith('/collect')) {
+        collections++;
+        return {status:502,body:{detail:'Chưa có video'}};
+      }
+      if (opts.method==='POST') {
+        posts++;
+        return ok({id:'auto-'+posts,status:'failed',error:'Timeout'});
+      }
+      return ok({status:'failed',error:'Timeout'});
+    });
+    auto.node('batchAutoRetry').checked=true;
+    auto.node('batchKind').value='video';
+    auto.node('batchPrompts').value='Retry once';
+    await auto.context.runBatch();
+    assert.equal(posts,2);
+    assert.equal(collections,1);
+    assert.equal(auto.context.batchEntries()[0].job.status,'failed');
+    assert.equal(auto.context.batchEntries()[0].job.attempt,1);
+
+    let recoveredPosts=0;
+    const refill=setup(async(url,opts)=>{
+      if (url.endsWith('/collect')) return ok({status:'completed',result:{url:'/v1/media/old.mp4'}});
+      if (opts.method==='POST') { recoveredPosts++; return ok({id:'fresh',status:'completed',result:{url:'/v1/media/new.mp4'}}); }
+      return ok({status:'failed',error:'Timeout'});
+    },new Map([['muse2api_batch_history_v1',JSON.stringify({next:2,batches:[{id:'old',kind:'video',jobs:[
+      {index:0,id:'old-task',prompt:'Old failure',status:'failed',error:'Timeout'}
+    ]}]})]]));
+    await new Promise(resolve=>setImmediate(resolve));
+    refill.node('batchAutoRetry').checked=true;
+    refill.node('batchKind').value='video';
+    refill.node('batchPrompts').value='Fresh prompt';
+    await refill.context.runBatch();
+    assert.equal(recoveredPosts,1);
+    assert.equal(refill.context.batchEntries().filter(({job})=>job.status==='completed').length,2);
+    let stoppedPosts=0, releaseCollect;
+    const collectGate=new Promise(resolve=>{releaseCollect=resolve;});
+    const stopped=setup(async(url,opts)=>{
+      if (url.endsWith('/collect')) { await collectGate; return {status:502,body:{detail:'Chưa có video'}}; }
+      stoppedPosts++;
+      return ok({id:'stop-auto',status:'failed',error:'Timeout'});
+    });
+    stopped.node('batchAutoRetry').checked=true;
+    stopped.node('batchKind').value='video';
+    stopped.node('batchPrompts').value='Stop before resubmit';
+    const stoppingRun=stopped.context.runBatch();
+    await new Promise(resolve=>setImmediate(resolve));
+    stopped.context.stopBatch();
+    releaseCollect();
+    await stoppingRun;
+    assert.equal(stoppedPosts,1);
+    assert.equal(stopped.context.batchEntries()[0].job.status,'failed');
+  }
+  {
+  const recoveryCalls = [];
+  const videoRecovery = setup(async (url, opts) => {
+    if (opts.method !== 'POST') return ok({status:'failed',error:url.includes('pending-video') ? 'original timeout' : 'timeout'});
+    assert.equal(opts.method, 'POST');
+    assert(url.endsWith('/collect'));
+    recoveryCalls.push(url);
+    if (url.includes('ready-video')) return ok({status:'completed',result:{url:'/v1/media/recovered.mp4'}});
+    return {status:502,body:{detail:'Still rendering'}};
+  }, new Map([['muse2api_batch_history_v1',JSON.stringify({next:4,batches:[{id:'recover',kind:'video',jobs:[
+    {index:0,id:'ready-video',prompt:'Ready',status:'failed',error:'timeout'},
+    {index:1,id:'pending-video',prompt:'Pending',status:'failed',error:'original timeout'},
+    {index:2,prompt:'Never submitted',status:'failed',error:'No task'}
+  ]}]})]]));
+  await new Promise(resolve=>setImmediate(resolve));
+  videoRecovery.context.setBatchFilter('failed');
+  assert(videoRecovery.node('batch-job-0').innerHTML.includes('Lấy lại video'));
+  assert.equal(videoRecovery.node('batchRecoverVideos').disabled,false);
+  await videoRecovery.context.recoverFailedVideos();
+  assert.equal(recoveryCalls.length,2);
+  const recoveredJobs = videoRecovery.context.batchEntries().map(({job})=>job);
+  assert.equal(recoveredJobs[0].status,'completed');
+  assert.equal(videoRecovery.node('batch-job-0').hidden,true);
+  assert.equal(recoveredJobs[1].status,'failed');
+  assert.equal(recoveredJobs[1].error,'original timeout');
+  assert.equal(videoRecovery.node('batch-job-1').hidden,false);
+  await videoRecovery.context.recoverFailedVideos(1);
+  assert.equal(recoveryCalls.length,3);
+  assert.equal(recoveredJobs[1].status,'failed');
+  }
+  const settingsStore = new Map();
+  const settings = setup(async () => ok({}), settingsStore);
+  settings.node('batchKind').value = 'video';
+  settings.node('batchSize').value = '9:16';
+  settings.node('batchDuration').value = '8';
+  settings.node('batchConcurrency').value = '5';
+  settings.context.saveBatchSettings();
+  const reloadedSettings = setup(async () => ok({}), settingsStore);
+  reloadedSettings.context.restoreBatchSettings();
+  assert.equal(reloadedSettings.node('batchKind').value, 'video');
+  assert.equal(reloadedSettings.node('batchSize').value, '9:16');
+  assert.equal(reloadedSettings.node('batchDuration').value, '8');
+  assert.equal(reloadedSettings.node('batchConcurrency').value, '5');
+  assert.equal(reloadedSettings.node('batchDurationField').style.display, '');
   let active=0, peak=0, posts=[];
   const first = setup(async (url, opts) => {
     if (opts.method === 'POST') {
@@ -104,7 +203,7 @@ async function main() {
   maxBatch.node('batchConcurrency').value='999';
   maxBatch.node('batchPrompts').value=Array.from({length:12},(_,i)=>'Prompt '+i).join('\n');
   await maxBatch.context.runBatch();
-  assert.equal(maxPosts,12);assert.equal(maxActive,12);assert.equal(maxBatch.state().concurrency,30);
+  assert.equal(maxPosts,12);assert.equal(maxActive,10);assert.equal(maxBatch.state().concurrency,10);
   assert(maxBatch.state().jobs.every(job=>job.status==='completed'));
 
   let submits=0, queries=0;
@@ -265,12 +364,17 @@ async function main() {
     {index:1,prompt:'Not submitted',status:'waiting'},
     {index:2,prompt:'Unknown submission',status:'submitting'}
   ]}]})]]);
+  liveStorage.set('muse2api_batch_prompt_draft', 'Prompt draft must survive history restoration');
   const live=setup(async(url,opts)=>{
     assert.notEqual(opts.method,'POST');assert.equal(url,'/v1/videos/live-video');restoredPolls++;
     if(restoredPolls===1)return ok({id:'live-video',status:'processing',progress:55,elapsed:20});
     if(restoredPolls===2)return {status:503,body:{detail:'Temporary network failure'}};
     return ok({id:'live-video',status:'completed',result:{url:'/v1/media/live.mp4'}});
   },liveStorage);
+  assert.equal(live.node('batchPrompts').value, 'Prompt draft must survive history restoration');
+  assert.equal(liveStorage.get('muse2api_batch_prompt_draft'), 'Prompt draft must survive history restoration');
+  assert.equal(live.context.batchEntries()[0].job.prompt, 'Running video');
+  assert.equal(live.context.batchEntries()[0].job.id, 'live-video');
   await new Promise(resolve=>setImmediate(resolve));
   assert(live.node('batch-job-0').innerHTML.includes('55%'));
   assert(live.node('batch-job-0').innerHTML.includes('Đang xử lý'));
@@ -663,11 +767,16 @@ async function main() {
   lanes.node('batchConcurrency').value = '30';
   lanes.node('batchPrompts').value = ['Một','Hai','Ba','Bốn'].join('\n');
   await lanes.context.runBatch();
-  assert.equal(lanes.state().concurrency, 30);
+  assert.equal(lanes.state().concurrency, 10);
   assert.equal(lanePosts.filter(id => id === 'cookie-a').length, 2);
   assert.equal(lanePosts.filter(id => id === 'cookie-b').length, 2);
-  assert(html.includes('value="30"'));
-  assert(html.includes('value="20" selected'));
+  assert(!html.includes('<option value="30">30</option>'));
+  assert(html.includes('value="10" selected'));
+  vm.runInContext('accounts = [{id:"cookie-a", enabled:true}]', lanes.context);
+  assert.equal(vm.runInContext('batchAccountLanes(10).length', lanes.context), 5);
+  vm.runInContext('applyBatchServerLimits({max_concurrency:6, per_account_concurrency:2})', lanes.context);
+  assert.equal(vm.runInContext('batchAccountLanes(10).length', lanes.context), 2);
+  assert.equal(vm.runInContext('batchParallelLimit()', lanes.context), 6);
   assert(!html.includes('8 (tối đa)'));
 
   let reconnectPosts = 0, reconnectCollects = 0;
@@ -793,6 +902,40 @@ async function main() {
   assert.equal(forgotten.node('batchFolderLabel').textContent, '');
   assert.equal(vm.runInContext('batchDirectory', forgotten.context), null);
   sharedFolderDb = null;
+
+  {
+    sharedFolderDb = memoryFolderDb();
+    let readable=true, authorized=false, pickerCalls=0;
+    const directory={name:'Remembered videos',
+      queryPermission:async({mode})=>authorized || (mode==='read' && readable) ? 'granted' : 'prompt',
+      requestPermission:async()=>{authorized=true;return 'granted';},
+      getFileHandle:async()=>({getFile:async()=>({name:'001.mp4'})})};
+    const seed=setup(async()=>ok({}));
+    await seed.context.persistBatchFolder(directory);
+    const savedHistory=new Map([['muse2api_batch_history_v1',JSON.stringify({next:2,batches:[{id:'saved-folder',kind:'video',jobs:[
+      {index:0,prompt:'Saved video',status:'completed',saveState:'saved',savedName:'001.mp4',clipChecked:true}
+    ]}]})]]);
+    const reopened=setup(async()=>{throw new Error('Local preview must not fetch');},savedHistory);
+    reopened.context.URL=class extends URL {static createObjectURL(){return 'blob:restored-video';} static revokeObjectURL(){}};
+    for(let i=0;i<10;i++) await new Promise(resolve=>setImmediate(resolve));
+    assert(reopened.node('batch-job-0').innerHTML.includes('blob:restored-video'));
+    assert.equal(vm.runInContext('batchDirectory',reopened.context),null);
+    reopened.context.clearBatchFolder();
+    assert(!reopened.node('batch-job-0').innerHTML.includes('blob:restored-video'));
+    await seed.context.persistBatchFolder(directory);
+    readable=false;
+    const lockedFolder=setup(async()=>{throw new Error('Permission recovery must not fetch');},savedHistory);
+    lockedFolder.context.URL=class extends URL {static createObjectURL(){return 'blob:authorized-video';} static revokeObjectURL(){}};
+    lockedFolder.context.window.showDirectoryPicker=async()=>{pickerCalls++;return directory;};
+    for(let i=0;i<10;i++) await new Promise(resolve=>setImmediate(resolve));
+    assert(lockedFolder.node('batch-job-0').innerHTML.includes('Remembered videos'));
+    assert(lockedFolder.node('batch-job-0').innerHTML.includes('Cho phép mở video đã lưu'));
+    await lockedFolder.context.chooseBatchFolder();
+    for(let i=0;i<4;i++) await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(pickerCalls,0);
+    assert(lockedFolder.node('batch-job-0').innerHTML.includes('blob:authorized-video'));
+    sharedFolderDb=null;
+  }
 
   console.log('PASS: bounded concurrency, per-line jobs, failure isolation, queue retries, polling retries, stop, uncertain submissions, video settings, escaping, safe links, folder selection, cancellation, local saving, streaming and save retries without regeneration, cumulative numbering, preview counts, reload persistence, reset gating, collision avoidance, table filters/search, retries, guarded deletion and automatic post-reload status recovery without duplicate submissions.');
 }

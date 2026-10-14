@@ -200,7 +200,7 @@ class AccountPoolManager:
             self.cond.notify_all()
 
 
-GEN_LOCK = ConcurrencyLock(limit=max(CFG.max_concurrency, CFG.per_account_concurrency * 8))
+GEN_LOCK = ConcurrencyLock(limit=CFG.max_concurrency)
 ACCOUNT_POOL = AccountPoolManager(store, per_account=CFG.per_account_concurrency)
 IMAGE_TASK_LOCK = threading.Lock()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1252,7 +1252,8 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
         timing = {"t0": time.time()}
         def _on_acquired():
             timing["t0"] = time.time()
-            store.update_task(task["id"], status="processing", progress=15)
+            store.update_task(task["id"], status="processing", progress=15,
+                              processing_started_at=timing["t0"])
         try:
             def prog_cb(p):
                 store.update_task(task["id"], progress=p)
@@ -1289,6 +1290,13 @@ def get_video(task_id: str, _=Depends(auth)):
     _schedule_rendered_harvest(t)
     out = dict(t)
     status = out.get("status")
+    if status == "failed":
+        with _COLLECTING_LOCK:
+            recovering = task_id in _COLLECTING_TASKS
+        if recovering:
+            out["status"] = "processing"
+            out["progress"] = max(out.get("progress", 0) or 0, 92)
+            status = "processing"
     if status in ("succeeded", "success", "done"):
         out["status"] = "completed"
     if out.get("status") == "completed":
@@ -1637,6 +1645,8 @@ def admin_status(_=Depends(auth)):
         "essential_cookies": list(ESSENTIAL_COOKIES),
         "base_url": f"{base}/v1" if base else "",
         "config": {"site": CFG.site_url, "cdp_port": CFG.cdp_port,
+                   "max_concurrency": CFG.max_concurrency,
+                   "per_account_concurrency": CFG.per_account_concurrency,
                    "image_timeout": CFG.image_timeout,
                    "video_timeout": CFG.video_timeout,
                    "host": CFG.host, "port": CFG.port,
@@ -2152,7 +2162,7 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False):
     if not accounts:
         raise MuseGenerationError("Không còn cookie của tài khoản đã chạy prompt này.")
     kind = "video" if task.get("kind") == "video" else "image"
-    timeout = 25 if quick else 60
+    timeout = 60
     lock_timeout = 8 if quick else 120
     account_wait = 8 if quick else 60
     errors = []
@@ -2170,11 +2180,12 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False):
 
 
 def _harvest_ready(task: dict, now: float) -> bool:
-    if task.get("kind") != "video" or task.get("status") != "processing":
+    if task.get("kind") != "video" or task.get("status") not in ("processing", "failed"):
         return False
     if not _safe_muse_thread(task.get("muse_url")) or not task.get("account"):
         return False
-    if now - float(task.get("updated_at") or 0) < 45:
+    started_at = task.get("processing_started_at") or task.get("created_at") or 0
+    if now - float(started_at) < 45:
         return False
     return now >= _HARVEST_NEXT.get(task["id"], 0)
 
@@ -2214,7 +2225,7 @@ def _schedule_rendered_harvest(task: dict) -> None:
     def run():
         try:
             current = store.get_task(task_id) or {}
-            if current.get("status") != "processing" or _video_file_saved(task_id):
+            if current.get("status") not in ("processing", "failed") or _video_file_saved(task_id):
                 return
             if not _HARVEST_TURN.acquire(blocking=False):
                 return
@@ -2224,7 +2235,7 @@ def _schedule_rendered_harvest(task: dict) -> None:
                     store.update_task(task_id, account=account.get("id"),
                                       account_label=account.get("label") or account.get("id"))
                     current = store.get_task(task_id) or current
-                if (store.get_task(task_id) or {}).get("status") == "processing":
+                if (store.get_task(task_id) or {}).get("status") in ("processing", "failed"):
                     _collected_task_payload(current, result)
                 _HARVEST_MISS.pop(task_id, None)
                 _HARVEST_NEXT.pop(task_id, None)

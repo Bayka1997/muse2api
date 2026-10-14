@@ -70,7 +70,10 @@ class MuseEngine:
         self._start_lock = threading.Lock()
         self._active_contexts: set[str] = set()
         self._contexts_lock = threading.Lock()
-        self.task_views = TaskSessionViews(getattr(cfg, "cdp_port", 19210), self._dispose_view_context)
+        self.task_views = TaskSessionViews(
+            getattr(cfg, "cdp_port", 19210), self._dispose_view_context,
+            ttl=getattr(cfg, "session_view_ttl", 120),
+            max_retained=getattr(cfg, "session_view_max_retained", 2))
         self._last_http_renew: dict[str, float] = {}
         self._log = None
         os.makedirs(cfg.profile_dir, exist_ok=True)
@@ -689,19 +692,19 @@ class MuseEngine:
         "}"
         "document.querySelectorAll('[data-testid^=\"hatch-chat-attachment-presentation-\"]').forEach(function(a){ addEl(a, a.getAttribute('data-testid')); });"
         "document.querySelectorAll('video').forEach(function(v){"
-        "  var thread=v.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"]');"
+        "  var thread=v.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"], div[class*=\"hatch-chat-groupable-bubble\"]');"
         "  if(!thread || thread.closest('form, [class*=chat-user-bubble], [class*=\"group/msg\"]')) return;"
         "  addEl(v, thread.getAttribute('data-testid') || 'thread-video');"
         "});"
         "document.querySelectorAll('a[href]').forEach(function(a){"
         "  var h=a.href||'';"
         "  if(!/\\.(mp4|webm|mov)(\\?|$)/i.test(h) || seen.has(h)) return;"
-        "  var thread=a.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"]');"
+        "  var thread=a.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"], div[class*=\"hatch-chat-groupable-bubble\"]');"
         "  if(!thread || thread.closest('form, [class*=chat-user-bubble], [class*=\"group/msg\"]')) return;"
         "  seen.add(h);"
         "  list.push({tid: thread.getAttribute('data-testid') || 'thread-video', hasVideo:true, hasImg:false, src:h, vSrc:h, iSrc:'', w:0, h:0});"
         "});"
-        "document.querySelectorAll('div[class*=\"hatch-agent-bubble-bg\"] img, div[class*=\"hatch-agent-bubble-bg\"] video').forEach(function(m){"
+        "document.querySelectorAll('div[class*=\"hatch-agent-bubble-bg\"] img, div[class*=\"hatch-agent-bubble-bg\"] video, div[class*=\"hatch-chat-groupable-bubble\"] img, div[class*=\"hatch-chat-groupable-bubble\"] video').forEach(function(m){"
         "  var s = m.currentSrc || m.src || '';"
         "  if(s && !s.includes('avatar') && !s.includes('emoji')) addEl(m.parentElement || m, 'agent-media');"
         "});"
@@ -945,21 +948,31 @@ class MuseEngine:
     # ---------------- 取字节 ----------------
     _EXTRACT_JS = r"""
     (async function(src, expect){
+      var controller = new AbortController();
+      var reader = null;
+      var timer = setTimeout(function(){
+        controller.abort();
+        if(reader && reader.readyState === FileReader.LOADING) reader.abort();
+      }, expect === 'video' ? 90000 : 600000);
       try{
         var u = src;
         if(!u) return JSON.stringify({ok:false,err:'no-media-src'});
-        var r = await fetch(u);
+        var r = await fetch(u, {signal:controller.signal});
         if(!r.ok) return JSON.stringify({ok:false,err:'media-http-'+r.status});
         var b = await r.blob();
-        var ab = await b.arrayBuffer();
-        var bytes = new Uint8Array(ab);
-        var s = '';
-        for(var i=0; i<bytes.length; i+=65536){
-          s += String.fromCharCode.apply(null, bytes.subarray(i, i+65536));
-        }
-        return JSON.stringify({ok:true, mime:b.type||'', size:b.size, url:u, b64:btoa(s)});
+        if(controller.signal.aborted) throw new Error('media-fetch-timeout');
+        var encoded = await new Promise(function(resolve, reject){
+          reader = new FileReader();
+          reader.onload = function(){resolve(reader.result.split(',')[1]);};
+          reader.onerror = function(){reject(reader.error || new Error('media-read-failed'));};
+          reader.onabort = function(){reject(new Error('media-fetch-timeout'));};
+          reader.readAsDataURL(b);
+        });
+        return JSON.stringify({ok:true, mime:b.type||'', size:b.size, url:u, b64:encoded});
       }catch(e){
         return JSON.stringify({ok:false, err:String(e)});
+      }finally{
+        clearTimeout(timer);
       }
     })(%s, %s)
     """
@@ -1116,17 +1129,24 @@ class MuseEngine:
 
     def extract_bytes(self, src: str, expect: str = "image", retries: int = 4):
         last = "未知"
-        for _ in range(retries):
+        attempts = min(retries, 2) if expect == "video" else retries
+        for attempt in range(attempts):
+            started = time.monotonic()
             raw = self.page.js(self._EXTRACT_JS % (json.dumps(src), json.dumps(expect)),
-                               await_promise=True, timeout=600)
+                               await_promise=True, timeout=100 if expect == "video" else 610)
             try:
                 info = json.loads(raw) if isinstance(raw, str) else raw
             except Exception:  # noqa: BLE001
                 info = {"ok": False, "err": f"解析失败 {str(raw)[:150]}"}
             if info.get("ok"):
+                log.info("Media extraction complete: kind=%s attempt=%s seconds=%.2f bytes=%s",
+                         expect, attempt + 1, time.monotonic() - started, info.get("size"))
                 return base64.b64decode(info["b64"]), info.get("mime", ""), info.get("url", "")
             last = info.get("err", "未知")
-            time.sleep(2)
+            log.info("Media extraction failed: kind=%s attempt=%s seconds=%.2f",
+                     expect, attempt + 1, time.monotonic() - started)
+            if attempt + 1 < attempts:
+                time.sleep(2)
         raise MuseGenerationError(f"未能取回生成结果: {last}")
 
     # ---------------- 下载兜底 ----------------
@@ -1339,15 +1359,36 @@ class MuseEngine:
             raise MuseGenerationError("提示词发送未确认，已停止生成")
         self._local.generation_submitted = True
         self.generation_context()
+        attachment_wait_started = time.monotonic()
         att = self._wait_attachment(
             baseline_src, max(0, deadline - time.monotonic()), expect, on_progress=on_progress,
             base_agent_cnt=base_agent_cnt, base_att_cnt=len(atts_before),
             stop_event=stop_event, baseline_sources=baseline_sources
         )
-        if not att:
+        log.info("Media attachment wait complete: kind=%s seconds=%.2f found=%s",
+                 expect, time.monotonic() - attachment_wait_started, bool(att))
+        try:
+            if not att:
+                raise MuseGenerationError("等待生成超时，未出现新的生成结果")
+            result = self._deliver_attachment(att, expect)
+            if expect == "video" and file_is_page_clip(result.get("path") or ""):
+                try:
+                    os.remove(result["path"])
+                except OSError:
+                    pass
+                raise MuseGenerationError("检测到 Muse 公用视频片段，不是本次任务结果")
+            return result
+        except MuseGenerationError as generation_error:
+            muse_url = (self.generation_context() or {}).get("muse_url")
+            if muse_url:
+                try:
+                    return self.collect_rendered(
+                        cookies, muse_url, expect=expect, expires=expires,
+                        account_id=account_id, timeout=60)
+                except MuseGenerationError as recovery_error:
+                    log.info("按会话回收已生成媒体失败: %s", recovery_error)
             self._debug_dump("no-attachment")
-            raise MuseGenerationError("等待生成超时，未出现新的生成结果")
-        return self._deliver_attachment(att, expect)
+            raise generation_error
 
     _PICK_CHAT_SCROLLER_JS = (
         "function pickChatScroller(){"
@@ -1442,8 +1483,6 @@ class MuseEngine:
                 return False
             width = int(att.get("w") or 0)
             height = int(att.get("h") or 0)
-            if width == 480 and height == 480:
-                return False
             # Blob player reports 0×0 until the file is actually attached.
             if video_src.startswith("blob:") and (width <= 0 or height <= 0):
                 return False
@@ -1506,6 +1545,8 @@ class MuseEngine:
 
     def _deliver_attachment(self, att: dict, expect: str) -> dict:
         os.makedirs(self.cfg.media_dir, exist_ok=True)
+        log.info("Media download starting: kind=%s", expect)
+        download_started = time.monotonic()
         data = mime = url = None
         selected_src = (att.get("vSrc") if expect == "video" else None) or att.get("src") or ""
         try:
@@ -1528,6 +1569,8 @@ class MuseEngine:
                     "w": att.get("w"), "h": att.get("h")}
 
         path = self._download_fallback(selected_src)
+        log.info("Media fallback download complete: kind=%s seconds=%.2f found=%s",
+                 expect, time.monotonic() - download_started, bool(path))
         if not path:
             raise MuseGenerationError("已生成但未能取回文件")
         ext = os.path.splitext(path)[1].lower() or ".bin"

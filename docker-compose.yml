@@ -1,7 +1,6 @@
-version: '3.8'
-
 services:
   muse2api:
+    platform: linux/amd64
     build: .
     image: muse2api:latest
     container_name: muse2api
