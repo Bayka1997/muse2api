@@ -16,3 +16,34 @@ try:
 except m.MuseGenerationError as e:
  print('RESULT rejected_before_generated elapsed',round(clock[0],1),'error',str(e))
  if '--assert' in sys.argv:raise
+
+clock[0] = 0.0
+engine.attachments = lambda: []
+engine.page = SimpleNamespace(js=lambda _: json.dumps({
+    'cnt': 1, 'txt': 'Your call:', 'stop': False,
+    'choices': ['Re-roll take 2', 'Keep take 1 as-is', 'Skip the scene'],
+}))
+try:
+    engine._wait_attachment('', 30, 'video')
+except m.MuseGenerationError as exc:
+    assert 'MUSE_ACTION_REQUIRED:' in str(exc)
+    assert clock[0] < 2
+else:
+    raise AssertionError('Interactive choice must release the generation slot promptly')
+print('PASS: interactive choice ends the wait without waiting for timeout')
+
+clock[0] = 0.0
+clicks = [0]
+def reroll_page(script):
+    if 'button.click()' in script:
+        clicks[0] += 1
+        return True
+    return json.dumps({'cnt': 1, 'txt': 'Your call:', 'stop': False,
+                       'choices': ['Re-roll take 2', 'Keep take 1 as-is']})
+engine.page = SimpleNamespace(js=reroll_page)
+engine.attachments = lambda: ([{'src': 'result.mp4', 'vSrc': 'result.mp4', 'hasVideo': True, 'w': 100, 'h': 100}]
+                              if clicks[0] and clock[0] >= 2 else [])
+result = engine._wait_attachment('', 30, 'video')
+assert result['vSrc'] == 'result.mp4'
+assert clicks[0] == 1
+print('PASS: Re-roll is selected once and the resulting video is collected')

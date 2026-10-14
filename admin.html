@@ -667,6 +667,7 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
         <button class="ghost mini" id="batchRecoverVideos" onclick="recoverFailedVideos()" disabled>Lấy lại toàn bộ video lỗi</button>
         <button class="ghost mini" id="batchReconnect" onclick="reconnectInterrupted()" disabled>Nối lại bị ngắt</button>
         <button class="ghost mini" id="batchDownloadPending" onclick="downloadPendingVideos()" disabled>Tải toàn bộ video chưa tải</button>
+        <button class="ghost mini" id="batchDownloadAll" onclick="downloadAllVideos()" disabled>Tải toàn bộ</button>
         <button class="ghost mini" id="batchDeleteDone" onclick="deleteFinishedBatchJobs()" disabled>Xóa đã xong</button>
         <button class="danger mini" id="batchDeleteAll" onclick="deleteAllBatchJobs()" disabled>Xóa toàn bộ</button>
       </div>
@@ -1915,6 +1916,37 @@ function pendingVideoDownloads(){
 
 let batchDownloading = false;
 
+async function downloadAllVideos(){
+  if (batchDownloading || batchEntries().some(({job})=>job.saveState === 'saving')) return;
+  const entries = batchEntries().filter(({batch,job})=>batch.kind === 'video' && job.status === 'completed' && safeBatchMediaUrl(job.url));
+  if (!entries.length) return toast('Chưa có video hoàn tất để tải.', 'warn');
+  if (!window.isSecureContext || typeof window.showDirectoryPicker !== 'function')
+    return toast('Chọn thư mục cần Chrome/Edge qua localhost hoặc HTTPS.', 'warn');
+  batchDownloading = true;
+  updateBatchListControls();
+  let saved = 0;
+  try {
+    const directory = await window.showDirectoryPicker({id:'muse2api-download-all',mode:'readwrite',startIn:'downloads'});
+    await persistBatchFolder(directory);
+    applyChosenFolder(directory);
+    for (const {batch,job} of entries) {
+      batch.directory = directory;
+      delete job.targetName;
+      job.saveState = '';
+      await saveBatchFile(batch,job);
+      if (job.saveState === 'saved') saved++;
+      $('batchDownloadAll').textContent = `Đã tải ${saved}/${entries.length}`;
+    }
+    toast(`Đã lưu ${saved}/${entries.length} video vào ${directory.name}.`, saved === entries.length ? 'ok' : 'warn');
+  } catch (error) {
+    if (error.name !== 'AbortError') toast('Không tải được video: ' + error.message, 'bad');
+  } finally {
+    batchDownloading = false;
+    $('batchDownloadAll').textContent = 'Tải toàn bộ';
+    updateBatchListControls();
+  }
+}
+
 async function ensureBatchDownloadFolder(){
   if (batchDirectory) return true;
   let directory = batchDirectoryRestore;
@@ -2276,8 +2308,8 @@ function matchesBatchFilter(job, filter){
   if (job.status === 'completed' || job.status === 'succeeded') {
     return filter === 'all' || filter === 'completed' || (filter === 'failed' && job.saveState === 'failed');
   }
-  if (job.collecting || job.reconnecting) return filter === 'all' || filter === 'sending';
-  if (job.sendQueued || job.preparing) return filter === 'all' || filter === 'unsent';
+  if (job.collecting || job.reconnecting || job.recoveryQueued || job.sendQueued || job.preparing)
+    return filter === 'all' || filter === 'sending';
   if (filter === 'recovery') return !!job.recoveryQueued;
   if (filter !== 'all' && job.recoveryQueued) return false;
   if (filter === 'sending') return ['submitting','queued','processing','running'].includes(job.status);
@@ -2314,6 +2346,7 @@ function updateBatchListControls(){
   $('batchRecoverVideos').disabled = batchRecoveringVideos || batchRestarting || !entries.some(({batch,job})=>canRecoverFailedVideo(batch,job));
   $('batchReconnect').disabled = !entries.some(({job}) => canReconnect(job));
   $('batchDownloadPending').disabled = batchDownloading || !pendingVideoDownloads().length;
+  $('batchDownloadAll').disabled = batchDownloading || entries.some(({job})=>job.saveState === 'saving') || !entries.some(({batch,job})=>batch.kind === 'video' && job.status === 'completed' && safeBatchMediaUrl(job.url));
   $('batchDeleteDone').disabled = locked || !entries.some(({job})=>job.status==='completed' && job.saveState==='saved');
   $('batchDeleteAll').disabled = locked || !entries.length;
   applyBatchFilter();
@@ -2351,6 +2384,7 @@ function deleteAllBatchJobs(){
 
 
 function canCollectRendered(job){
+  if (String(job.error || '').includes('MUSE_ACTION_REQUIRED:')) return false;
   return job.status === 'failed' && !!job.id && !!safeMuseThreadUrl(job.museUrl) && !safeBatchMediaUrl(job.url);
 }
 
@@ -2367,7 +2401,7 @@ async function recoverFailedVideos(index){
     job.recoveryQueued = true;
     renderBatchJob(batch,job);
   }
-  setBatchFilter('recovery');
+  setBatchFilter('sending');
   updateBatchListControls();
   toast(`Đang lấy lại ${entries.length} video từ cuộc trò chuyện cũ…`);
   let saved = 0;
@@ -2697,7 +2731,7 @@ async function processBatchJob(batch, job, runner, accountId){
       job.status = 'failed'; job.error = result.error || 'Tạo nội dung thất bại';
       renderBatchJob(batch, job);
       if (!alive()) return;
-      if (await collectRenderedJob(job.index, {allowWhileRunning:true, keepError:true})) return;
+      if (!String(job.error || '').includes('MUSE_ACTION_REQUIRED:') && await collectRenderedJob(job.index, {allowWhileRunning:true, keepError:true})) return;
       return;
     }
     if (!job.id || Date.now() >= deadline) {
@@ -2894,6 +2928,7 @@ async function executeBatchEntries(entries){
       let entry = runner.next<entries.length ? entries[runner.next++] : null;
       if (!entry && autoRetry) {
         entry = batchEntries().find(({batch,job})=>batch.kind==='video' && job.status==='failed'
+          && !String(job.error || '').includes('MUSE_ACTION_REQUIRED:')
           && !job.preparing && !job.collecting && !job.checking && !job.reconnecting && !job.editing
           && job.saveState!=='saving' && !safeBatchMediaUrl(job.url) && !retried.has(job));
         if (entry) {

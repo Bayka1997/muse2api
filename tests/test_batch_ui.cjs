@@ -74,6 +74,28 @@ const complete = id => ({id,status:'completed',progress:100,data:[{url:'/v1/medi
 
 async function main() {
   {
+    const all=setup(async()=>ok({}));
+    let picked=0;
+    const directory={name:'All videos'};
+    all.context.window.showDirectoryPicker=async()=>{picked++;return directory;};
+    vm.runInContext(`
+      batchHistory=[{kind:'video',jobs:[
+        {index:0,status:'completed',url:'/v1/media/one.mp4',saveState:'saved'},
+        {index:1,status:'completed',url:'/v1/media/two.mp4'},
+        {index:2,status:'processing'}]}];
+      let savedVideos=[];
+      saveBatchFile=async(batch,job)=>{savedVideos.push(job.index);job.saveState='saved';};
+    `,all.context);
+    await all.context.downloadAllVideos();
+    assert.equal(picked,1);
+    assert.equal(vm.runInContext('savedVideos.join(",")',all.context),'0,1');
+    assert.equal(vm.runInContext('batchDirectory',all.context),directory);
+    all.context.window.showDirectoryPicker=async()=>{throw Object.assign(new Error('Cancelled'),{name:'AbortError'});};
+    await all.context.downloadAllVideos();
+    assert.equal(vm.runInContext('savedVideos.length',all.context),2);
+    assert.equal(all.node('batchDownloadAll').disabled,false);
+  }
+  {
     const collecting=setup(async()=>ok({}));
     const job={status:'failed',collecting:true,recoveryQueued:true};
     assert(collecting.context.matchesBatchFilter(job,'sending'));
@@ -155,8 +177,8 @@ async function main() {
     const run = retryQueue.context.rerunBatchJobs('failed');
     assert.equal(posts,1);
     const jobs = retryQueue.context.batchEntries().map(({job})=>job);
-    assert.equal(jobs.filter(job=>retryQueue.context.matchesBatchFilter(job,'sending')).length,1);
-    assert.equal(jobs.filter(job=>retryQueue.context.matchesBatchFilter(job,'unsent')).length,2);
+    assert.equal(jobs.filter(job=>retryQueue.context.matchesBatchFilter(job,'sending')).length,3);
+    assert.equal(jobs.filter(job=>retryQueue.context.matchesBatchFilter(job,'unsent')).length,0);
     assert(jobs.every(job=>!retryQueue.context.matchesBatchFilter(job,'failed')));
     assert.equal(jobs.filter(job=>job.sendQueued).length,2);
     release();
@@ -182,8 +204,8 @@ async function main() {
     assert.equal(queued.node('batchRecoverVideos').disabled,false);
     const recovery = queued.context.recoverFailedVideos();
     assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'failed')).length,0);
-    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'recovery')).length,1);
-    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'sending')).length,1);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'recovery')).length,0);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'sending')).length,2);
     assert(queued.node('batch-job-1').innerHTML.includes('Chờ lấy lại video'));
     await queued.context.recoverFailedVideos();
     assert.equal(collections,1);

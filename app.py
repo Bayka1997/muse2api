@@ -989,6 +989,8 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 engine.close_current_page()
             except MuseGenerationError as exc:
                 last_exc = exc
+                if "MUSE_ACTION_REQUIRED:" in str(exc):
+                    raise
                 store.mark(cur_acc["id"], True, f"任务异常: {str(exc)[:60]}")
                 try:
                     if task_id:
@@ -2180,6 +2182,8 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False):
 
 
 def _harvest_ready(task: dict, now: float) -> bool:
+    if "MUSE_ACTION_REQUIRED:" in str(task.get("error") or ""):
+        return False
     if task.get("kind") != "video" or task.get("status") not in ("processing", "failed"):
         return False
     if not _safe_muse_thread(task.get("muse_url")) or not task.get("account"):

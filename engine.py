@@ -842,6 +842,7 @@ class MuseEngine:
         t_start = time.time()
         stable_src, stable_n = "", 0
         last_txt, txt_stable = "", 0
+        reroll_requested = False
         while time.time() < deadline:
             if stop_event is not None and stop_event.is_set():
                 raise MuseGenerationError("客户端已断开连接，终止生成任务")
@@ -912,7 +913,8 @@ class MuseEngine:
                         || document.querySelector('button[aria-label*="Stop" i]')
                         || document.querySelector('button[aria-label*="停止"]'));
                     var tail = document.body ? (document.body.innerText||'').slice(-700) : '';
-                    return JSON.stringify({cnt: bs.length, txt: lastTxt, stop: hasStop, tail: tail});
+                    var choices = bs.length ? [].slice.call(bs[bs.length-1].querySelectorAll('button')).map(function(b){return (b.innerText||'').trim();}) : [];
+                    return JSON.stringify({cnt: bs.length, txt: lastTxt, stop: hasStop, tail: tail, choices: choices});
                 })()""")
                 st = json.loads(st_raw) if st_raw else {}
             except Exception:
@@ -927,6 +929,24 @@ class MuseEngine:
             cur_cnt = st.get("cnt") or 0
             cur_txt = st.get("txt") or ""
             has_stop = bool(st.get("stop"))
+            choices = st.get("choices") or []
+            if cur_cnt > base_agent_cnt and not has_stop and len(choices) >= 2 and any(
+                    re.search(r"re-roll|keep take|skip the scene", str(choice), re.I) for choice in choices):
+                if not reroll_requested and any(re.search(r"^re-roll\b", str(c), re.I) for c in choices):
+                    clicked = self.page.js("""(function(){
+                        var bs=[].slice.call(document.querySelectorAll('div[class*="hatch-chat-groupable-bubble"]'))
+                            .filter(function(b){return /hatch-agent-bubble-bg/.test(b.className||'');});
+                        var buttons=bs.length ? [].slice.call(bs[bs.length-1].querySelectorAll('button')) : [];
+                        var button=buttons.find(function(b){return /^re-roll\\b/i.test((b.innerText||'').trim()) && !b.disabled && b.getAttribute('aria-disabled')!=='true';});
+                        if (!button) return false;
+                        button.click(); return true;
+                    })()""")
+                    if clicked is True:
+                        reroll_requested = True
+                        base_agent_cnt = cur_cnt
+                        log.info("Muse requested a choice; selected Re-roll once in the current conversation")
+                        continue
+                raise MuseGenerationError("MUSE_ACTION_REQUIRED: Muse đang chờ lựa chọn của bạn (" + ", ".join(str(c) for c in choices)[:200] + "). Mở cuộc trò chuyện để xử lý; không tự gửi lại prompt.")
             if cur_cnt > base_agent_cnt and cur_txt and not has_stop and len(atts) <= base_att_cnt:
                 # 检查是否包含媒体文件生成关键词（如 .webp, .png, .mp4, imagine_media 等），若是则说明正在产出媒体，绝不能误判为纯文本拒答
                 is_media_report = bool(re.search(r"\.(?:webp|png|jpe?g|mp4|webm)|imagine_media|deliverable|generated\s+.*image|verified\s+generated|artifact", cur_txt, re.I))
