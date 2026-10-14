@@ -74,6 +74,14 @@ const complete = id => ({id,status:'completed',progress:100,data:[{url:'/v1/medi
 
 async function main() {
   {
+    const collecting=setup(async()=>ok({}));
+    const job={status:'failed',collecting:true,recoveryQueued:true};
+    assert(collecting.context.matchesBatchFilter(job,'sending'));
+    assert(!collecting.context.matchesBatchFilter(job,'failed'));
+    assert(!collecting.context.matchesBatchFilter(job,'unsent'));
+    assert(!collecting.context.matchesBatchFilter(job,'recovery'));
+  }
+  {
     const stale=setup(async()=>ok({}));
     vm.runInContext(`batchHistory=[{kind:'video',jobs:[{index:0,status:'completed',url:'/v1/media/done.mp4',saveState:'saved',preparing:true,sendQueued:true,recoveryQueued:true}]}];rebuildBatchTable();`,stale.context);
     const job=stale.context.batchEntries()[0].job;
@@ -174,7 +182,8 @@ async function main() {
     assert.equal(queued.node('batchRecoverVideos').disabled,false);
     const recovery = queued.context.recoverFailedVideos();
     assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'failed')).length,0);
-    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'recovery')).length,2);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'recovery')).length,1);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'sending')).length,1);
     assert(queued.node('batch-job-1').innerHTML.includes('Chờ lấy lại video'));
     await queued.context.recoverFailedVideos();
     assert.equal(collections,1);
