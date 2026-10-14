@@ -1377,6 +1377,8 @@ async function clearTasks(){
 /* ================= Thư viện media ================= */
 let _allMedia = [];
 let _selectedMedia = new Set();
+let mediaLoading = false;
+let mediaRenderSignature = '';
 
 function updateMediaSelectionUI(){
   const count = _selectedMedia.size;
@@ -1467,6 +1469,8 @@ async function delSelectedMedia(){
 }
 
 async function loadMedia(){
+  if (mediaLoading) return;
+  mediaLoading = true;
   try{
     const d = await api('/admin/media');
     const ms = d.media || [];
@@ -1477,6 +1481,10 @@ async function loadMedia(){
     }
     $('mediaCount').textContent = ms.length;
     $('sMedia').textContent = ms.length;
+    if (!$('tab-media').classList.contains('active')) return;
+    const signature = JSON.stringify(ms);
+    if (mediaRenderSignature === signature) { updateMediaSelectionUI(); return; }
+    mediaRenderSignature = signature;
     if (!ms.length){
       $('mediaGrid').innerHTML = '<div class="empty">Chưa có tệp media nào được tạo</div>';
       updateMediaSelectionUI();
@@ -1490,7 +1498,7 @@ async function loadMedia(){
           <input type="checkbox" class="tile-check" ${isSel ? 'checked' : ''} onchange="toggleMediaSelect('${esc(m.name)}')">
         </label>
         <div class="thumb">${m.kind === 'video'
-          ? `<video src="${esc(m.url)}" muted playsinline preload="metadata"></video>`
+          ? `<span class="badge info">Video · Bấm Mở để xem</span>`
           : `<img src="${esc(m.url)}" loading="lazy" alt="">`}</div>
         <div class="meta">
           <div class="nm" title="${esc(m.name)}">${esc(m.name)}</div>
@@ -1504,7 +1512,8 @@ async function loadMedia(){
       </div>`;
     }).join('');
     updateMediaSelectionUI();
-  }catch(e){ $('mediaGrid').innerHTML = `<div class="empty">Tải thất bại: ${esc(uiText(e.message))}</div>`; }
+  }catch(e){ mediaRenderSignature = ''; $('mediaGrid').innerHTML = `<div class="empty">Tải thất bại: ${esc(uiText(e.message))}</div>`; }
+  finally { mediaLoading = false; }
 }
 
 /* ================= Thử trực tuyến ================= */
@@ -1564,7 +1573,7 @@ async function runVideo(){
         const vbytes = (s.result && s.result.bytes) || 0;
         box.innerHTML = `<b style="color:var(--ok)">✓ Tạo thành công</b>
           <span class="mono" style="color:var(--muted);margin-left:10px">${el}s · ${fmtBytes(vbytes)}</span>
-          <video src="${esc(vurl)}" controls playsinline></video>
+          <video src="${esc(vurl)}" controls playsinline preload="none"></video>
           <pre class="out">${esc(JSON.stringify(s, null, 2))}</pre>`;
         btn.disabled = false; btn.textContent = 'Bắt đầu tạo video';
         loadMedia(); loadTasks();
@@ -1807,6 +1816,7 @@ async function retryBatchSave(index){
   const batch = batchHistory.find(item => item.jobs.some(job => job.index === index));
   const job = batch && batch.jobs.find(item => item.index === index);
   if (!job) return;
+  if (!await ensureBatchDownloadFolder()) return;
   if (batchDirectory && batch.directory !== batchDirectory) {
     batch.directory = batchDirectory; delete job.targetName;
   }
@@ -1905,6 +1915,23 @@ function pendingVideoDownloads(){
 
 let batchDownloading = false;
 
+async function ensureBatchDownloadFolder(){
+  if (batchDirectory) return true;
+  let directory = batchDirectoryRestore;
+  if (!directory) {
+    try { directory = await readStoredBatchFolder(); } catch (_) {}
+  }
+  if (!directory) return true;
+  batchDirectoryRestore = directory;
+  try {
+    const permission = typeof directory.requestPermission === 'function'
+      ? await directory.requestPermission({mode:'readwrite'}) : 'granted';
+    if (permission === 'granted') { applyChosenFolder(directory); return true; }
+  } catch (_) {}
+  toast('Chưa có quyền ghi vào thư mục đã chọn. Bấm nút tên thư mục để cấp quyền rồi tải lại.', 'warn');
+  return false;
+}
+
 async function downloadPendingVideos(){
   if (batchDownloading) return;
   const entries = pendingVideoDownloads();
@@ -1914,6 +1941,7 @@ async function downloadPendingVideos(){
   toast(`Đang tải ${entries.length} video…`);
   let saved = 0, missed = 0;
   try {
+    if (!await ensureBatchDownloadFolder()) return;
     for (const {batch, job} of entries) {
       if (job.saveState === 'saved' || job.saveState === 'saving' || job.saveState === 'browserRequested') continue;
       if (batchDirectory) { batch.directory = batchDirectory; delete job.targetName; }
@@ -2124,6 +2152,7 @@ function cachedLocalPreview(batch, job){
 }
 
 function scheduleLocalBatchPreview(batch, job){
+  if (batch.kind === 'video') return;
   const directory = batchPreviewDirectory(batch);
   if (!directory || job.saveState !== 'saved' || !job.savedName) return;
   const cached = batchLocalPreviews.get(job.index);
@@ -2159,10 +2188,13 @@ async function loadLocalBatchPreview(batch, job, directory){
 }
 
 function batchPreviewHtml(batch, job){
+  if (batch.kind === 'video') return job.status === 'completed'
+    ? '<span class="badge ok">Video đã sẵn sàng để tải</span>'
+    : '<span class="hint">Chưa có video</span>';
   const preview = cachedLocalPreview(batch, job);
   if (preview) {
     if (batch.kind === 'video')
-      return `<video src="${esc(preview)}" controls playsinline preload="metadata"></video>`;
+      return `<video src="${esc(preview)}" controls playsinline preload="none"></video>`;
     return `<button type="button" class="batch-preview-btn" title="Xem ảnh" onclick="openBatchImagePreview(${job.index})"><img src="${esc(preview)}" alt="Kết quả prompt ${job.index + 1}"></button>`;
   }
   const directory = batchPreviewDirectory(batch);
@@ -2181,6 +2213,12 @@ function batchPreviewHtml(batch, job){
 }
 
 function renderBatchJob(batch, job){
+  if (job.status === 'completed' || job.status === 'succeeded') {
+    job.status = 'completed';
+    delete job.preparing;
+    delete job.sendQueued;
+    delete job.recoveryQueued;
+  }
   const box = $('batch-job-' + job.index);
   if (!box) return;
   const cls = job.preparing || job.collecting || job.reconnecting ? 'warn' : job.status === 'completed' ? 'ok' : ['failed','unconfirmed'].includes(job.status) ? 'bad' : 'warn';
@@ -2235,6 +2273,9 @@ function isUnsentBatchJob(job){
   return !job.id && (['waiting','stopped'].includes(job.status) || job.status === 'failed');
 }
 function matchesBatchFilter(job, filter){
+  if (job.status === 'completed' || job.status === 'succeeded') {
+    return filter === 'all' || filter === 'completed' || (filter === 'failed' && job.saveState === 'failed');
+  }
   if (job.sendQueued || job.preparing) return filter === 'all' || filter === 'unsent';
   if (filter === 'recovery') return !!job.recoveryQueued;
   if (filter !== 'all' && job.recoveryQueued) return false;
@@ -2647,7 +2688,7 @@ async function processBatchJob(batch, job, runner, accountId){
       job.progress = 100;
       if (job.status === 'failed') job.error = 'Tác vụ hoàn tất nhưng không có liên kết kết quả hợp lệ.';
       renderBatchJob(batch, job);
-      if (job.status === 'completed' && batch.directory) await saveBatchFile(batch, job);
+      if (job.status === 'completed' && batch.directory) queueBatchSave(runner, batch, job);
       loadMedia(); loadTasks();
       return;
     }
@@ -2821,6 +2862,14 @@ function batchAccountLanes(count){
   for (let i = 0; i < capacity; i++) lanes.push(live.length ? live[i % live.length].id : '');
   return lanes;
 }
+function queueBatchSave(runner, batch, job){
+  runner.saveTail = (runner.saveTail || Promise.resolve()).then(() => saveBatchFile(batch, job)).catch(error => {
+    job.saveState = 'failed';
+    job.saveError = error.message;
+    renderBatchJob(batch, job);
+  });
+}
+
 async function executeBatchEntries(entries){
   if (activeBatch && activeBatch.running) {
     activeBatch.stop = true;
@@ -2863,7 +2912,7 @@ async function executeBatchEntries(entries){
               const media=(result.data && result.data[0]) || result.result || result.video || result;
               if (['completed','succeeded'].includes(result.status) && safeBatchMediaUrl(media.url || result.url || '')) {
                 applyCollectedTask(batch,job,result);
-                if (batch.directory) await saveBatchFile(batch,job);
+                if (batch.directory) queueBatchSave(runner,batch,job);
                 continue;
               }
               // An existing task may still be running; do not submit a duplicate.
@@ -2894,7 +2943,10 @@ async function executeBatchEntries(entries){
       }
     }
   };
-  try{await Promise.all(lanes.map(accountId=>worker(accountId)));}
+  try{
+    await Promise.all(lanes.map(accountId=>worker(accountId)));
+    await runner.saveTail;
+  }
   finally{
     runner.running=false;
     if (runner.abandoned || activeBatch !== runner) return;

@@ -64,7 +64,7 @@ function setup(request, storage = new Map()) {
     },
   };
   vm.createContext(context); vm.runInContext(script, context);
-  vm.runInContext('loadTasks = async () => {}; loadMedia = async () => {};', context);
+  vm.runInContext('originalLoadMedia = loadMedia; loadTasks = async () => {}; loadMedia = async () => {};', context);
   node('batchKind').value='image';node('batchSize').value='16:9';
   node('batchDuration').value='5';node('batchConcurrency').value='2';
   return {context, node, storage, state:()=>vm.runInContext('activeBatch',context)};
@@ -73,6 +73,65 @@ const ok = body => ({status:200,body});
 const complete = id => ({id,status:'completed',progress:100,data:[{url:'/v1/media/'+id+'.webp'}]});
 
 async function main() {
+  {
+    const stale=setup(async()=>ok({}));
+    vm.runInContext(`batchHistory=[{kind:'video',jobs:[{index:0,status:'completed',url:'/v1/media/done.mp4',saveState:'saved',preparing:true,sendQueued:true,recoveryQueued:true}]}];rebuildBatchTable();`,stale.context);
+    const job=stale.context.batchEntries()[0].job;
+    assert(!job.preparing && !job.sendQueued && !job.recoveryQueued);
+    assert(stale.context.matchesBatchFilter(job,'completed'));
+    assert(!stale.context.matchesBatchFilter(job,'unsent'));
+    assert(!stale.node('batch-job-0').innerHTML.includes('Chờ gửi'));
+  }
+  {
+    let posts=0, releaseSave;
+    const slowSave=setup(async()=>{
+      posts++;
+      return ok({id:'saved-'+posts,status:'completed',url:'/v1/media/saved-'+posts+'.mp4'});
+    });
+    slowSave.node('batchConcurrency').value='1';
+    slowSave.context.holdSave=()=>new Promise(resolve=>{releaseSave=resolve;});
+    vm.runInContext(`
+      batchDirectory={name:'Results'};
+      batchHistory=[{id:'slow-save',kind:'video',directory:batchDirectory,jobs:[0,1,2].map(index=>({index,prompt:'Retry '+index,status:'failed'}))}];
+      let saveCount=0;
+      saveBatchFile=async(batch,job)=>{if(++saveCount===1) await holdSave();job.saveState='saved';};
+    `,slowSave.context);
+    const run=slowSave.context.rerunBatchJobs('failed');
+    for(let i=0;i<5;i++) await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(posts,3,'A pending file save must not block the next generation');
+    assert.equal(vm.runInContext('saveCount',slowSave.context),1,'File saves remain sequential');
+    releaseSave();
+    await run;
+    assert.equal(vm.runInContext('saveCount',slowSave.context),3);
+  }
+  {
+    const folderDownload = setup(async()=>ok({}));
+    vm.runInContext(`
+      let folderWrites=0, browserDownloads=0, permissionGranted=false;
+      batchDirectoryRestore={name:'Chosen folder',requestPermission:async()=>permissionGranted?'granted':'denied'};
+      batchHistory=[{kind:'video',jobs:[{index:0,status:'completed',url:'/v1/media/test.mp4'}]}];
+      saveBatchFile=async(batch,job)=>{folderWrites++;job.saveState='saved';};
+      downloadBatchFile=async()=>{browserDownloads++;};
+    `, folderDownload.context);
+    await folderDownload.context.downloadPendingVideos();
+    assert.equal(vm.runInContext('browserDownloads + folderWrites',folderDownload.context),0);
+    vm.runInContext('permissionGranted=true',folderDownload.context);
+    await folderDownload.context.downloadPendingVideos();
+    assert.equal(vm.runInContext('folderWrites',folderDownload.context),1);
+    assert.equal(vm.runInContext('browserDownloads',folderDownload.context),0);
+  }
+  {
+    const media = setup(async () => ok({media:[{name:'test.mp4',url:'/v1/media/test.mp4',kind:'video',bytes:100,mtime:1}]}));
+    await media.context.originalLoadMedia();
+    assert.equal(media.node('mediaGrid').innerHTML,'');
+    media.node('tab-media').classList.contains = () => true;
+    await media.context.originalLoadMedia();
+    assert(!media.node('mediaGrid').innerHTML.includes('<video'));
+    assert(media.node('mediaGrid').innerHTML.includes('/v1/media/test.mp4'));
+    media.node('mediaGrid').innerHTML = 'unchanged grid';
+    await media.context.originalLoadMedia();
+    assert.equal(media.node('mediaGrid').innerHTML,'unchanged grid');
+  }
   {
     let release, posts = 0, running = 0, peak = 0;
     const retryQueue = setup(async (url, opts) => {
@@ -503,17 +562,18 @@ async function main() {
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(mediaReads,1);
   const previewHtml=localPreview.node('batch-job-0').innerHTML;
-  assert(previewHtml.includes('<video src="blob:local-preview"'));
+  assert(!previewHtml.includes('<video'));
+  assert(previewHtml.includes('Video đã sẵn sàng để tải'));
   assert(!previewHtml.includes('<video src="http'));
   assert(!previewHtml.includes('/v1/media/local-preview.mp4" controls'));
   const reloaded=setup(async()=>{throw new Error('Reloaded preview must not fetch');},localPreview.storage);
-  assert(reloaded.node('batch-job-0').innerHTML.includes('Chọn lại thư mục để xem'));
+  assert(reloaded.node('batch-job-0').innerHTML.includes('Video đã sẵn sàng để tải'));
   assert(!reloaded.node('batch-job-0').innerHTML.includes('<video src='));
   reloaded.context.URL=localPreview.context.URL;
   reloaded.context.window.showDirectoryPicker=localPreview.context.window.showDirectoryPicker;
   await reloaded.context.chooseBatchFolder();
   await new Promise(resolve=>setImmediate(resolve));
-  assert(reloaded.node('batch-job-0').innerHTML.includes('<video src="blob:local-preview"'));
+  assert(!reloaded.node('batch-job-0').innerHTML.includes('<video'));
   assert.equal(mediaReads,1);
 
   let imageReads=0;
@@ -971,7 +1031,7 @@ async function main() {
     const reopened=setup(async()=>{throw new Error('Local preview must not fetch');},savedHistory);
     reopened.context.URL=class extends URL {static createObjectURL(){return 'blob:restored-video';} static revokeObjectURL(){}};
     for(let i=0;i<10;i++) await new Promise(resolve=>setImmediate(resolve));
-    assert(reopened.node('batch-job-0').innerHTML.includes('blob:restored-video'));
+    assert(!reopened.node('batch-job-0').innerHTML.includes('<video'));
     assert.equal(vm.runInContext('batchDirectory',reopened.context),null);
     reopened.context.clearBatchFolder();
     assert(!reopened.node('batch-job-0').innerHTML.includes('blob:restored-video'));
@@ -981,12 +1041,11 @@ async function main() {
     lockedFolder.context.URL=class extends URL {static createObjectURL(){return 'blob:authorized-video';} static revokeObjectURL(){}};
     lockedFolder.context.window.showDirectoryPicker=async()=>{pickerCalls++;return directory;};
     for(let i=0;i<10;i++) await new Promise(resolve=>setImmediate(resolve));
-    assert(lockedFolder.node('batch-job-0').innerHTML.includes('Remembered videos'));
-    assert(lockedFolder.node('batch-job-0').innerHTML.includes('Cho phép mở video đã lưu'));
+    assert(lockedFolder.node('batch-job-0').innerHTML.includes('Video đã sẵn sàng để tải'));
     await lockedFolder.context.chooseBatchFolder();
     for(let i=0;i<4;i++) await new Promise(resolve=>setImmediate(resolve));
     assert.equal(pickerCalls,0);
-    assert(lockedFolder.node('batch-job-0').innerHTML.includes('blob:authorized-video'));
+    assert(!lockedFolder.node('batch-job-0').innerHTML.includes('<video'));
     sharedFolderDb=null;
   }
 
