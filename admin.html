@@ -2308,8 +2308,9 @@ function matchesBatchFilter(job, filter){
   if (job.status === 'completed' || job.status === 'succeeded') {
     return filter === 'all' || filter === 'completed' || (filter === 'failed' && job.saveState === 'failed');
   }
-  if (job.collecting || job.reconnecting || job.recoveryQueued || job.sendQueued || job.preparing)
-    return filter === 'all' || filter === 'sending';
+  if (job.collecting || job.reconnecting) return filter === 'all' || filter === 'sending';
+  if (job.recoveryQueued) return filter === 'all' || filter === 'recovery';
+  if (job.sendQueued || job.preparing) return filter === 'all' || filter === 'unsent';
   if (filter === 'recovery') return !!job.recoveryQueued;
   if (filter !== 'all' && job.recoveryQueued) return false;
   if (filter === 'sending') return ['submitting','queued','processing','running'].includes(job.status);
