@@ -657,6 +657,7 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
           <button class="ghost mini" id="batchFilterUnsent" onclick="setBatchFilter('unsent')">Chưa gửi (0)</button>
           <button class="ghost mini" id="batchFilterCompleted" onclick="setBatchFilter('completed')">Hoàn thành (0)</button>
           <button class="ghost mini" id="batchFilterFailed" onclick="setBatchFilter('failed')">Lỗi (0)</button>
+          <button class="ghost mini" id="batchFilterRecovery" onclick="setBatchFilter('recovery')">Chờ lấy lại (0)</button>
         </div>
         <input type="text" id="batchSearch" placeholder="Tìm STT hoặc prompt…" oninput="applyBatchFilter()" style="width:190px">
         <button class="ghost mini" id="batchRunUnsent" onclick="rerunBatchJobs('unsent')" disabled>Chạy lại prompt chưa gửi</button>
@@ -1593,6 +1594,7 @@ const batchLocalPreviews = new Map();
 let batchNextNumber = 1;
 let batchFilter = 'all';
 let batchRecoveryPolling = false;
+let batchRecoveringVideos = false;
 const BATCH_HISTORY_STORE = 'muse2api_batch_history_v1';
 const batchSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -1985,6 +1987,7 @@ function restoreBatchHistory(){
           job.contextPending = !!job.id && !safeMuseThreadUrl(job.museUrl);
           if (job.saveState === 'saving') job.saveState = 'failed';
           delete job.checking;
+          delete job.recoveryQueued;
           delete job.collecting;
           if (job.saveState !== 'saved') delete job.targetName;
           return job;
@@ -2052,13 +2055,13 @@ function updateBatchOptions(){
 }
 
 function batchStatusLabel(status){
-  return ({waiting:'Chưa gửi', submitting:'Đang gửi', stopped:'Đã bỏ qua',
+  return ({waiting:'Chưa gửi', submitting:'Đang gửi', queued:'Đã gửi · Chờ xử lý', stopped:'Đã bỏ qua',
     unconfirmed:'Chưa xác nhận'})[status] || statusLabel(status);
 }
 
 function renderBatchSummary(batch){
   const jobs = batchHistory.flatMap(item => item.jobs);
-  const count = status => jobs.filter(job => job.status === status).length;
+  const count = status => jobs.filter(job => job.status === status && !job.recoveryQueued).length;
   const done = count('completed'), failed = count('failed'), skipped = count('stopped');
   const uncertain = count('unconfirmed'), waiting = count('waiting');
   const running = jobs.length - done - failed - skipped - uncertain - waiting;
@@ -2067,7 +2070,7 @@ function renderBatchSummary(batch){
   const preparing = jobs.filter(job => job.preparing || job.collecting).length;
   const prefix = batchHistory.some(item => item.running && !item.stop) ? 'Đang chạy'
     : batchHistory.some(item => item.running) ? 'Đang hoàn tất tác vụ đã gửi'
-    : preparing ? 'Đang tạo lại' : 'Đã kết thúc đợt chạy';
+    : preparing ? 'Đang xử lý hàng chờ' : 'Đã kết thúc đợt chạy';
   $('batchSummary').textContent = `${prefix} · Tổng ${jobs.length} · Thành công ${done} · Lỗi ${failed} · Đang xử lý ${running} · Chưa gửi ${waiting} · Bỏ qua ${skipped} · Chưa xác nhận ${uncertain}` + ` · Đã tải/lưu ${saved} · Lỗi lưu ${saveFailed}`;
   persistBatchHistory(); updateBatchStartLabel();
 }
@@ -2183,8 +2186,8 @@ function renderBatchJob(batch, job){
   const cls = job.preparing || job.collecting || job.reconnecting ? 'warn' : job.status === 'completed' ? 'ok' : ['failed','unconfirmed'].includes(job.status) ? 'bad' : 'warn';
   const progress = Number.isFinite(job.progress) ? Math.max(0, Math.min(100, job.progress)) : 0;
   const url = safeBatchMediaUrl(job.url);
-  const busy = batchSending() || batchRestarting || job.preparing || job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || ['submitting','queued','processing','running'].includes(job.status);
-  const status = job.preparing ? 'Đang tạo lại' : job.reconnecting ? 'Đang nối lại' : job.collecting ? 'Đang lấy file' : batchStatusLabel(job.status);
+  const busy = batchSending() || batchRestarting || job.recoveryQueued || job.preparing || job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || ['submitting','queued','processing','running'].includes(job.status);
+  const status = job.reconnecting ? 'Đang nối lại' : job.collecting ? 'Đang lấy file' : job.recoveryQueued ? 'Chờ lấy lại video' : job.preparing || job.sendQueued ? 'Chờ gửi' : batchStatusLabel(job.status);
   const museUrl = safeMuseThreadUrl(job.museUrl);
   const media = batchPreviewHtml(batch, job);
   const promptBody = job.editing
@@ -2232,6 +2235,9 @@ function isUnsentBatchJob(job){
   return !job.id && (['waiting','stopped'].includes(job.status) || job.status === 'failed');
 }
 function matchesBatchFilter(job, filter){
+  if (job.sendQueued || job.preparing) return filter === 'all' || filter === 'unsent';
+  if (filter === 'recovery') return !!job.recoveryQueued;
+  if (filter !== 'all' && job.recoveryQueued) return false;
   if (filter === 'sending') return ['submitting','queued','processing','running'].includes(job.status);
   if (filter === 'unsent') return isUnsentBatchJob(job);
   if (filter === 'completed') return job.status === 'completed';
@@ -2247,7 +2253,7 @@ function applyBatchFilter(){
     const visible = matchesBatchFilter(job,batchFilter) && (!query || `${job.index+1} ${job.prompt}`.toLowerCase().includes(query));
     if (row) row.hidden = !visible;
   }
-  for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['sending','batchFilterSending','Đang gửi'],['unsent','batchFilterUnsent','Chưa gửi'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi']]) {
+  for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['sending','batchFilterSending','Đang gửi'],['unsent','batchFilterUnsent','Chưa gửi'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi'],['recovery','batchFilterRecovery','Chờ lấy lại']]) {
     $(id).textContent = `${label} (${entries.filter(({job})=>matchesBatchFilter(job,filter)).length})`;
     $(id).classList.toggle('active',batchFilter === filter);
   }
@@ -2263,7 +2269,7 @@ function updateBatchListControls(){
   $('batchRetryAll').disabled = locked || !entries.length;
   $('batchRetryFailed').disabled = locked || !entries.some(({job})=>['failed','unconfirmed','stopped'].includes(job.status));
   $('batchCollectRendered').disabled = locked || !entries.some(({job})=>canCollectRendered(job));
-  $('batchRecoverVideos').disabled = locked || !entries.some(({batch,job})=>canRecoverFailedVideo(batch,job));
+  $('batchRecoverVideos').disabled = batchRecoveringVideos || batchRestarting || !entries.some(({batch,job})=>canRecoverFailedVideo(batch,job));
   $('batchReconnect').disabled = !entries.some(({job}) => canReconnect(job));
   $('batchDownloadPending').disabled = batchDownloading || !pendingVideoDownloads().length;
   $('batchDeleteDone').disabled = locked || !entries.some(({job})=>job.status==='completed' && job.saveState==='saved');
@@ -2311,12 +2317,27 @@ function canRecoverFailedVideo(batch, job){
 }
 
 async function recoverFailedVideos(index){
-  if (batchIsBusy()) return;
+  if (batchRecoveringVideos || batchRestarting) return;
   const entries = batchEntries().filter(({batch,job}) => canRecoverFailedVideo(batch,job) && (index == null || job.index === index));
-  if (!entries.length) return;
-  let saved = 0;
+  if (!entries.length) return toast('Không có video lỗi có mã tác vụ để lấy lại.', 'warn');
+  batchRecoveringVideos = true;
   for (const {batch,job} of entries) {
-    if (job.collecting || job.checking) continue;
+    job.recoveryQueued = true;
+    renderBatchJob(batch,job);
+  }
+  setBatchFilter('recovery');
+  updateBatchListControls();
+  toast(`Đang lấy lại ${entries.length} video từ cuộc trò chuyện cũ…`);
+  let saved = 0;
+  try {
+  for (const {batch,job} of entries) {
+    while (job.checking || job.collecting) await new Promise(resolve => setTimeout(resolve, 250));
+    if (job.status === 'completed') {
+      delete job.recoveryQueued;
+      renderBatchJob(batch,job);
+      if (!['saved','browserRequested'].includes(job.saveState)) await retryBatchSave(job.index);
+      saved++; continue;
+    }
     const previousStatus = job.status, previousError = job.error;
     job.collecting = true;
     renderBatchJob(batch,job);
@@ -2335,12 +2356,22 @@ async function recoverFailedVideos(index){
       job.reconnectNote = 'Lấy lại video chưa thành công: ' + uiText(error.message);
     } finally {
       delete job.collecting;
+      delete job.recoveryQueued;
       renderBatchJob(batch,job);
     }
-    if (job.status === 'completed' && batchDirectory && !['saved','browserRequested'].includes(job.saveState)) {
-      batch.directory = batchDirectory;
-      await saveBatchFile(batch,job);
+    if (job.status === 'completed' && !['saved','browserRequested'].includes(job.saveState)) {
+      await retryBatchSave(job.index);
     }
+  }
+  } finally {
+    for (const {batch,job} of entries) {
+      delete job.recoveryQueued;
+      renderBatchJob(batch,job);
+    }
+    batchRecoveringVideos = false;
+    setBatchFilter(saved ? 'completed' : 'failed');
+    persistBatchHistory();
+    updateBatchListControls();
   }
   toast(`Đã lấy lại ${saved}/${entries.length} video. Các video chưa lấy được vẫn ở danh sách Lỗi.`, saved === entries.length ? 'ok' : 'warn');
 }
@@ -2551,6 +2582,7 @@ function stopBatch(runner){
   }
   for (const job of target.jobs) {
     if (job.status === 'waiting' && job.runToken === target.token) {
+      delete job.sendQueued;
       job.status = 'stopped'; job.error = '';
       const owner=batchHistory.find(item=>item.jobs.includes(job));
       if(owner)renderBatchJob(owner,job);
@@ -2560,6 +2592,7 @@ function stopBatch(runner){
 }
 
 async function processBatchJob(batch, job, runner, accountId){
+  delete job.sendQueued;
   const endpoint = batch.kind === 'image' ? '/v1/images/tasks' : '/v1/videos';
   const body = {prompt:job.prompt, size:batch.size, timeout:600};
   const token = runner && runner.token;
@@ -2669,7 +2702,7 @@ async function runBatch(){
 }
 
 function batchIsBusy(){
-  return batchRestarting || batchSending() || batchEntries().some(({job}) => job.saveState === 'saving');
+  return batchRecoveringVideos || batchRestarting || batchSending() || batchEntries().some(({job}) => job.saveState === 'saving');
 }
 
 function batchJobByIndex(index){
@@ -2718,7 +2751,7 @@ async function submitBatchPromptEdit(index){
 
 async function rerunBatchJobs(mode, index, options){
   if (batchIsBusy()) return;
-  const force = !!(options && options.force);
+  const force = mode === 'failed' || !!(options && options.force);
   const inflight = ['submitting','queued','processing','running'];
   const entries = batchEntries().filter(({job}) => !inflight.includes(job.status) && (
     mode==='one' ? job.index===index
@@ -2729,13 +2762,14 @@ async function rerunBatchJobs(mode, index, options){
     ? 'Không có prompt chưa gửi. Các prompt chưa xác nhận được giữ nguyên để tránh tạo trùng.'
     : 'Không có prompt đã dừng hoặc lỗi để tạo lại. Prompt đang chạy được giữ nguyên.', 'warn');
   batchRestarting = true;
+  setBatchFilter('sending');
   updateBatchListControls();
   try {
     for (const {batch, job} of entries) {
       job.preparing = true;
       renderBatchJob(batch, job);
     }
-    toast(`Đang tạo lại ${entries.length} prompt…`);
+    toast(`Đã đưa ${entries.length} prompt vào hàng chờ gửi.`);
     const pending = [];
     for (const entry of entries) {
       if (!force && await collectRenderedJob(entry.job.index, {keepError:true, allowWhileRunning:true})) {
@@ -2751,9 +2785,10 @@ async function rerunBatchJobs(mode, index, options){
       const attempt=(job.attempt || 0)+1;
       const {prompt,index}=job;
       Object.keys(job).forEach(key=>delete job[key]);
-      Object.assign(job,{prompt,index,attempt,status:'waiting',progress:0,createdAt:Math.floor(Date.now()/1000)});
+      Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:mode === 'failed',progress:0,createdAt:Math.floor(Date.now()/1000)});
       batch.directory=batchDirectory;
     }
+    if (mode === 'failed') setBatchFilter('sending');
     await executeBatchEntries(pending);
   } finally {
     batchRestarting = false;

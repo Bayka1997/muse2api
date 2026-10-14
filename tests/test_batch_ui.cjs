@@ -74,6 +74,58 @@ const complete = id => ({id,status:'completed',progress:100,data:[{url:'/v1/medi
 
 async function main() {
   {
+    let release, posts = 0, running = 0, peak = 0;
+    const retryQueue = setup(async (url, opts) => {
+      assert.equal(url, '/v1/videos');
+      assert.equal(opts.method, 'POST');
+      posts++; running++; peak = Math.max(peak,running);
+      if (posts === 1) await new Promise(resolve => { release = resolve; });
+      running--;
+      return ok({id:'retry-'+posts,status:'completed',url:'/v1/media/retry-'+posts+'.mp4'});
+    });
+    retryQueue.node('batchConcurrency').value = '1';
+    vm.runInContext(`batchHistory = [{id:'retry',kind:'video',jobs:[0,1,2].map(index => ({index,id:'old-'+index,prompt:'Retry '+index,status:'failed'}))}]; rebuildBatchTable();`,retryQueue.context);
+    const run = retryQueue.context.rerunBatchJobs('failed');
+    assert.equal(posts,1);
+    const jobs = retryQueue.context.batchEntries().map(({job})=>job);
+    assert.equal(jobs.filter(job=>retryQueue.context.matchesBatchFilter(job,'sending')).length,1);
+    assert.equal(jobs.filter(job=>retryQueue.context.matchesBatchFilter(job,'unsent')).length,2);
+    assert(jobs.every(job=>!retryQueue.context.matchesBatchFilter(job,'failed')));
+    assert.equal(jobs.filter(job=>job.sendQueued).length,2);
+    release();
+    await run;
+    assert.equal(posts,3);
+    assert.equal(peak,1);
+    assert(jobs.every(job=>job.status==='completed'));
+  }
+  {
+    let release;
+    let collections = 0;
+    const queued = setup(async (url, opts) => {
+      if (opts.method === 'POST' && url.endsWith('/collect')) {
+        collections++;
+        if (collections === 1) await new Promise(resolve => { release = resolve; });
+        return {status:502, body:{detail:'Still rendering'}};
+      }
+      return ok({status:'failed',error:'timeout'});
+    });
+    vm.runInContext(`batchHistory = [{kind:'video', running:true, jobs:[
+      {index:0,id:'one',status:'failed',prompt:'One'},
+      {index:1,id:'two',status:'failed',prompt:'Two'}]}]; rebuildBatchTable();`, queued.context);
+    assert.equal(queued.node('batchRecoverVideos').disabled,false);
+    const recovery = queued.context.recoverFailedVideos();
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'failed')).length,0);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'recovery')).length,2);
+    assert(queued.node('batch-job-1').innerHTML.includes('Chờ lấy lại video'));
+    await queued.context.recoverFailedVideos();
+    assert.equal(collections,1);
+    release();
+    await recovery;
+    assert.equal(collections,2);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'recovery')).length,0);
+    assert.equal(queued.context.batchEntries().filter(({job}) => queued.context.matchesBatchFilter(job,'failed')).length,2);
+  }
+  {
     let posts=0, collections=0;
     const auto=setup(async(url,opts)=>{
       if (url.endsWith('/collect')) {
@@ -150,9 +202,10 @@ async function main() {
   assert.equal(recoveryCalls.length,2);
   const recoveredJobs = videoRecovery.context.batchEntries().map(({job})=>job);
   assert.equal(recoveredJobs[0].status,'completed');
-  assert.equal(videoRecovery.node('batch-job-0').hidden,true);
+  assert.equal(videoRecovery.node('batch-job-0').hidden,false);
   assert.equal(recoveredJobs[1].status,'failed');
   assert.equal(recoveredJobs[1].error,'original timeout');
+  videoRecovery.context.setBatchFilter('failed');
   assert.equal(videoRecovery.node('batch-job-1').hidden,false);
   await videoRecovery.context.recoverFailedVideos(1);
   assert.equal(recoveryCalls.length,3);
@@ -637,7 +690,7 @@ async function main() {
   assert.equal(collectPosts,1);
   assert.equal(fallback.state().jobs[0].status,'failed');
   await fallback.context.rerunBatchJobs('failed');
-  assert.equal(collectPosts,2);
+  assert.equal(collectPosts,1);
   assert.equal(videoPosts,2);
   assert.equal(fallback.state().jobs[0].status,'completed');
   assert(String(fallback.state().jobs[0].url).includes('/v1/media/retry-video.mp4'));
