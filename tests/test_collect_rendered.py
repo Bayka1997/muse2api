@@ -47,6 +47,9 @@ def engine_for(tmp):
 
 
 def main():
+    # Selection fixtures contain placeholder bytes; file validation has real-media tests.
+    original_validate = engine_module.validate_video_file
+    engine_module.validate_video_file = lambda _path: None
     original_sleep = engine_module.time.sleep
     engine_module.time.sleep = lambda _seconds: None
     try:
@@ -195,6 +198,7 @@ def main():
             else:
                 raise AssertionError("unsafe thread URL was opened")
     finally:
+        engine_module.validate_video_file = original_validate
         engine_module.time.sleep = original_sleep
     print("PASS: rendered video is downloaded from its own thread without sending the prompt or saving a poster.")
 

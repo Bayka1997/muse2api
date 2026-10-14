@@ -1513,7 +1513,7 @@ async function loadMedia(){
           <div style="margin-top:3px">${fmtBytes(m.bytes)} · ${fmtTime(m.mtime)}</div>
           <div class="ac">
             <a class="badge info" href="${esc(m.url)}" target="_blank">Mở</a>
-            <a class="badge mute" href="${esc(m.url)}" download>Tải xuống</a>
+            <a class="badge mute" href="${esc(m.url)}?download=true" download>Tải xuống</a>
             <a class="badge bad" href="javascript:void(0)" onclick="delSingleMedia('${esc(m.name)}')">Xóa</a>
           </div>
         </div>
@@ -1850,9 +1850,17 @@ async function batchSaveHandle(batch, job){
   throw new Error('Có quá nhiều tệp trùng tên. Hãy chọn thư mục khác.');
 }
 
+function batchDownloadUrl(batch, job){
+  const url = safeBatchMediaUrl(job.url);
+  if (!url || batch.kind !== 'video') return url;
+  const download = new URL(url);
+  download.searchParams.set('download', 'true');
+  return download.href;
+}
+
 async function saveBatchFile(batch, job){
   if (!batch.directory || job.status !== 'completed' || job.saveState === 'saving' || job.saveState === 'saved') return;
-  const url = safeBatchMediaUrl(job.url);
+  const url = batchDownloadUrl(batch, job);
   if (!url) return;
   job.saveState = 'saving'; job.saveError = '';
   renderBatchJob(batch, job);
@@ -1966,7 +1974,7 @@ async function downloadBatchFile(batch, job){
   if (job.status !== 'completed' || job.saveState === 'saving' || job.saveState === 'saved') return;
   job.saveState = 'saving'; job.saveError = ''; renderBatchJob(batch, job);
   try {
-    const response = await fetch(safeBatchMediaUrl(job.url));
+    const response = await fetch(batchDownloadUrl(batch, job));
     if (!response.ok) throw new Error('HTTP ' + response.status);
     const blobUrl = URL.createObjectURL(await response.blob());
     const link = document.createElement('a');

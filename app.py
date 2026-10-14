@@ -37,7 +37,6 @@ import threading
 import time
 import uuid
 import zipfile
-
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
@@ -1624,13 +1623,13 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
 
 
 @app.get("/v1/media/{name}")
-def get_media(name: str):
+def get_media(name: str, download: bool = False):
     if "/" in name or "\\" in name or ".." in name:
         raise HTTPException(400, "非法文件名")
     p = os.path.join(CFG.media_dir, name)
     if not os.path.isfile(p):
         raise HTTPException(404, "文件不存在")
-    return FileResponse(p)
+    return FileResponse(p, filename=name if download else None)
 
 
 # ------------------------- 管理：总览 -------------------------

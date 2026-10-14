@@ -15,6 +15,7 @@ import urllib.request
 from urllib.parse import urlsplit, urlunsplit
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -33,6 +34,32 @@ ATT_SEL = '[data-testid^="hatch-chat-attachment-presentation-"]'
 # cùng một file này; nó không phải video vừa render.
 PAGE_CLIP_BYTES = 357801
 PAGE_CLIP_SHA256 = "ace1b168a5cb90ac8f8c6316961aef6d8ccfdb3c3a8754057d995199365f6b2f"
+
+
+def validate_video_file(path: str) -> None:
+    """Reject wrong clips before delivery, allowing only timestamp rounding."""
+    try:
+        import imageio_ffmpeg
+
+        probe = subprocess.run(
+            [imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-i", path],
+            capture_output=True, text=True, errors="replace", timeout=20)
+        duration_match = re.search(
+            r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe.stderr)
+        if not duration_match or not re.search(r"Stream .*Video:", probe.stderr):
+            raise ValueError("Không đọc được thời lượng video")
+        hours, minutes, seconds = map(float, duration_match.groups())
+        duration = hours * 3600 + minutes * 60 + seconds
+        if not math.isfinite(duration) or abs(duration - 10.0) > 0.05:
+            raise ValueError(f"Video dài {duration:.2f}s; yêu cầu 10s")
+        if file_is_page_clip(path):
+            raise ValueError("Đây là video icon của Muse AI")
+    except Exception as exc:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise MuseGenerationError(f"Video tải xuống không hợp lệ: {exc}") from exc
 
 
 def file_is_page_clip(path: str) -> bool:
@@ -1583,6 +1610,8 @@ class MuseEngine:
             kind = "video" if ext in (".mp4", ".webm", ".mov") else "image"
             if expect == "video" and kind != "video":
                 raise MuseGenerationError(f"期望生成视频，但提取成品类型为图片 ({ext})，拒绝以图片冒充视频交付")
+            if kind == "video":
+                validate_video_file(dst)
             return {"path": dst, "filename": name, "size": len(data), "ext": ext, "mime": mime,
                     "kind": kind,
                     "via": "blob", "attachment": att.get("tid"),
@@ -1600,6 +1629,8 @@ class MuseEngine:
         kind = "video" if ext in (".mp4", ".webm", ".mov") else "image"
         if expect == "video" and kind != "video":
             raise MuseGenerationError(f"期望生成视频，但下载成品类型为图片 ({ext})，拒绝以图片冒充视频交付")
+        if kind == "video":
+            validate_video_file(dst)
         return {"path": dst, "filename": name, "size": os.path.getsize(dst), "ext": ext, "mime": "",
                 "kind": kind,
                 "via": "download", "attachment": att.get("tid"),

@@ -1086,8 +1086,8 @@ async function main() {
   assert.equal(bulk.node('batchDownloadPending').disabled, false);
   await bulk.context.downloadPendingVideos();
   assert.deepEqual(fetched, [
-    'http://localhost:18610/v1/media/new.mp4',
-    'http://localhost:18610/v1/media/retry.mp4'
+    'http://localhost:18610/v1/media/new.mp4?download=true',
+    'http://localhost:18610/v1/media/retry.mp4?download=true'
   ]);
   assert.equal(bulk.context.batchEntries().map(({job}) => job.saveState).join(','), 'saved,browserRequested,browserRequested,,');
   assert.equal(bulk.node('batchDownloadPending').disabled, true);
