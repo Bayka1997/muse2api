@@ -74,6 +74,84 @@ const complete = id => ({id,status:'completed',progress:100,data:[{url:'/v1/medi
 
 async function main() {
   {
+    const retry = setup(async () => ok({}));
+    retry.node('batchAutoRetry').checked = true;
+    vm.runInContext(`
+      batchHistory = [{kind:'image',jobs:[
+        {index:0,prompt:'Retry image',status:'failed',attempt:2,id:'old'},
+        {index:1,prompt:'Keep running',status:'processing'},
+        {index:2,prompt:'Unknown submission',status:'unconfirmed'}
+      ]},{kind:'video',jobs:[{index:3,prompt:'Retry video',status:'failed'}]}];
+      retryCalls = [];
+      executeBatchEntries = async entries => { retryCalls.push(entries); };
+    `, retry.context);
+    await retry.context.requeueFailedBatchJobs();
+    assert.equal(vm.runInContext('retryCalls.length',retry.context),0,'wait for 20 minutes');
+    vm.runInContext('batchFailedRetryAt = 0',retry.context);
+    await retry.context.requeueFailedBatchJobs();
+    assert.equal(vm.runInContext('retryCalls[0].length',retry.context),2);
+    const jobs = retry.context.batchEntries().map(entry => entry.job);
+    assert.equal(jobs[0].status,'waiting');
+    assert.equal(jobs[0].attempt,3);
+    assert.equal(jobs[0].id,undefined);
+    assert.equal(jobs[1].status,'processing');
+    assert.equal(jobs[2].status,'unconfirmed');
+    vm.runInContext(`
+      batchHistory[0].jobs[0].status = 'failed';
+      activeBatch = {running:true,stop:false,token:'live',jobs:[],entries:[],owners:[]};
+      batchFailedRetryAt = 0;
+    `,retry.context);
+    await retry.context.requeueFailedBatchJobs();
+    assert.equal(retry.state().entries.length,1,'append to active queue');
+    assert.equal(jobs[0].runToken,'live');
+    assert.equal(vm.runInContext('retryCalls.length',retry.context),1,'keep existing runner');
+    jobs[0].status='failed';
+    retry.node('batchAutoRetry').checked=false;
+    vm.runInContext('batchFailedRetryAt = 0',retry.context);
+    await retry.context.requeueFailedBatchJobs();
+    assert.equal(jobs[0].status,'failed','respect auto retry setting');
+  }
+  {
+    sharedFolderDb=memoryFolderDb();
+    const reference='data:image/png;base64,aW1hZ2U=';
+    const bodies=[];
+    const referenceRequest=async(url,opts)=>{
+      if (url.endsWith('/collect')) return {status:502,body:{detail:'Chưa có video'}};
+      if (opts.method==='POST') {
+        bodies.push(JSON.parse(opts.body));
+        return ok({id:'ref-'+bodies.length,status:'failed',error:'Timeout'});
+      }
+      return ok({status:'failed',error:'Timeout'});
+    };
+    const referenced=setup(referenceRequest);
+    referenced.context.FileReader=class {
+      readAsDataURL(){this.result=reference;this.onload();}
+    };
+    await referenced.context.chooseBatchReference({files:[{name:'shared.png',type:'image/png',size:10}]});
+    assert(referenced.node('batchReferencePreview').innerHTML.includes(reference));
+    referenced.node('batchKind').value='video';
+    referenced.node('batchPrompts').value='One\nTwo';
+    await referenced.context.runBatch();
+    assert.equal(bodies.length,2);
+    assert(bodies.every(body=>body.reference_image===reference));
+    assert(referenced.node('batch-job-0').innerHTML.includes('Image → Video'));
+    assert(!referenced.storage.get('muse2api_batch_history_v1').includes(reference));
+    referenced.context.clearBatchReference();
+    await referenced.context.rerunBatchJobs('one',0);
+    assert.equal(bodies[2].reference_image,reference);
+    const restored=setup(referenceRequest,referenced.storage);
+    await new Promise(resolve=>setImmediate(resolve));
+    await restored.context.rerunBatchJobs('one',1);
+    assert.equal(bodies[3].reference_image,reference);
+    const old=restored.context.batchEntries()[0].batch;
+    delete old.referenceImage;
+    old.id='missing-reference';
+    await restored.context.rerunBatchJobs('one',0);
+    assert.equal(bodies.length,4);
+    assert(restored.context.batchEntries()[0].job.error.includes('Ảnh tham chiếu đã mất'));
+    sharedFolderDb=null;
+  }
+  {
     const all=setup(async()=>ok({}));
     let picked=0;
     const directory={name:'All videos'};

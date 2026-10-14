@@ -625,11 +625,18 @@
         <div><label>Số tác vụ đồng thời</label><select id="batchConcurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
       </div>
       <label style="margin-top:14px">Danh sách prompt</label>
+      <div id="batchReferenceField" style="display:none;margin:12px 0">
+        <label>Ảnh tham chiếu dùng chung cho toàn bộ prompt video</label>
+        <input id="batchReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseBatchReference(this)">
+        <div id="batchReferencePreview"></div>
+        <button id="batchReferenceClear" class="ghost mini" onclick="clearBatchReference()">Bỏ ảnh tham chiếu</button>
+        <div class="hint">PNG, JPG hoặc WebP, tối đa 10 MB. Ảnh được giữ cùng đợt chạy để dùng lại khi xử lý video lỗi.</div>
+      </div>
       <textarea id="batchPrompts" rows="8" oninput="saveBatchPromptDraft(); updateBatchStartLabel()" placeholder="Một chú mèo cam đi trên bãi cỏ dưới nắng
 Một ngôi nhà gỗ giữa rừng thông
 Một thành phố tương lai dưới ánh đèn neon"></textarea>
       <div class="hint" id="batchConcurrencyHint">Toàn hệ thống tối đa 10 tác vụ đồng thời; mỗi tài khoản tối đa 5. Một tài khoản chạy tối đa 5; hai tài khoản có thể chạy tổng 10.</div>
-      <label><input type="checkbox" id="batchAutoRetry" checked onchange="saveBatchSettings()"> Tự xử lý lại video lỗi khi hàng chờ còn chỗ</label>
+      <label><input type="checkbox" id="batchAutoRetry" checked onchange="saveBatchSettings()"> Tự xử lý lại video lỗi khi hàng chờ còn chỗ và đưa toàn bộ ảnh/video lỗi vào hàng chờ mỗi 20 phút</label>
       <div class="hint">Ưu tiên prompt đang chờ, lấy video đã có trước khi tạo lại. Mỗi video lỗi được tự thử lại một lần trong mỗi đợt chạy.</div>
       <div style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:9px">
         <label>Nơi lưu kết quả trên máy bạn</label>
@@ -1596,6 +1603,67 @@ async function runVideo(){
 /* ================= Chạy hàng loạt ================= */
 let activeBatch = null;
 let batchDirectory = null;
+let batchReference = null;
+let batchReferenceLoading = false;
+let batchReferenceSelection = 0;
+
+async function chooseBatchReference(input){
+  if (batchIsBusy()) return;
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (!['image/png','image/jpeg','image/webp'].includes(file.type) || file.size > 10*1024*1024) {
+    input.value='';
+    return toast('Chọn ảnh PNG, JPG hoặc WebP tối đa 10 MB.', 'warn');
+  }
+  const selection=++batchReferenceSelection;
+  batchReferenceLoading=true;
+  try {
+    const data=await new Promise((resolve,reject)=>{
+      const reader=new FileReader();
+      reader.onload=()=>resolve(reader.result);
+      reader.onerror=()=>reject(new Error('Không đọc được ảnh.'));
+      reader.readAsDataURL(file);
+    });
+    if (selection!==batchReferenceSelection) return;
+    batchReference={data,name:file.name};
+    $('batchReferencePreview').innerHTML=`<img src="${esc(data)}" alt="Ảnh tham chiếu" style="max-width:180px;max-height:140px;margin:8px 0"><div>${esc(file.name)}</div>`;
+  } catch(error) { toast(error.message,'warn'); }
+  finally { if(selection===batchReferenceSelection) batchReferenceLoading=false; }
+}
+
+function clearBatchReference(){
+  if (batchIsBusy()) return;
+  batchReferenceSelection++;
+  batchReferenceLoading=false;
+  batchReference=null;
+  $('batchReferenceInput').value='';
+  $('batchReferencePreview').innerHTML='';
+}
+
+async function storeBatchReference(batch){
+  const opened=await openFolderStore('readwrite');
+  if (!opened) throw new Error('Trình duyệt không hỗ trợ lưu ảnh tham chiếu.');
+  try {
+    opened.store.put(batch.referenceImage,'reference:'+batch.id);
+    await new Promise((resolve,reject)=>{opened.tx.oncomplete=resolve;opened.tx.onerror=()=>reject(new Error('Không lưu được ảnh tham chiếu.'));opened.tx.onabort=()=>reject(new Error('Không lưu được ảnh tham chiếu.'));});
+  } finally { opened.db.close(); }
+}
+
+async function readBatchReference(batch){
+  if (!batch.hasReference) return null;
+  if (batch.referenceImage) return batch.referenceImage;
+  const opened=await openFolderStore('readonly');
+  if (!opened) throw new Error('Không đọc được ảnh tham chiếu đã lưu.');
+  try {
+    batch.referenceImage=await new Promise((resolve,reject)=>{
+      const request=opened.store.get('reference:'+batch.id);
+      request.onsuccess=()=>resolve(request.result || null);
+      request.onerror=()=>reject(new Error('Không đọc được ảnh tham chiếu đã lưu.'));
+    });
+    if (!batch.referenceImage) throw new Error('Ảnh tham chiếu đã mất. Hãy chọn lại ảnh và tạo đợt chạy mới.');
+    return batch.referenceImage;
+  } finally { opened.db.close(); }
+}
 let batchDirectoryRestore = null;
 let batchPreviewRestoredDirectory = null;
 let batchHistory = [];
@@ -1864,6 +1932,7 @@ function persistBatchHistory(){
   try {
     localStorage.setItem(BATCH_HISTORY_STORE, JSON.stringify({next:batchNextNumber,
       batches:batchHistory.map(batch => ({id:batch.id, kind:batch.kind, size:batch.size,
+        hasReference:!!batch.hasReference, referenceName:batch.referenceName || '',
         duration:batch.duration, jobs:batch.jobs.map(job => {
           const saved = {...job};
           delete saved.editing; delete saved.draft;
@@ -2107,6 +2176,7 @@ function splitBatchPrompts(text){
 
 function updateBatchOptions(){
   const video = $('batchKind').value === 'video';
+  $('batchReferenceField').style.display = video ? '' : 'none';
   $('batchDurationField').style.display = video ? '' : 'none';
   Array.from($('batchSize').options).forEach(option => {
     option.disabled = video && !['16:9', '9:16', '1:1'].includes(option.value);
@@ -2274,7 +2344,7 @@ function renderBatchJob(batch, job){
       ${job.savedName ? `<div class="mono" style="color:var(--ok);margin-top:5px">${job.saveState === 'saved' ? 'Đã lưu' : 'Tên file'}: ${esc(job.savedName)}</div>` : ''}
       ${job.id ? `<div class="mono">${esc(job.id)}</div>` : ''}
       ${job.accountLabel ? `<div class="mono">Tài khoản Muse: ${esc(job.accountLabel)}</div>` : ''}</td>
-    <td><span class="badge info">${batch.kind === 'video' ? 'Text → Video' : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div></td>
+    <td><span class="badge info">${batch.kind === 'video' ? (batch.hasReference ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div>${batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : ''}</td>
     <td class="mono">${job.createdAt ? fmtTime(job.createdAt) : '—'}<div>${job.elapsed ? esc(job.elapsed) + 's' : ''}</div>${job.attempt ? `<div>Lần tạo ${Number(job.attempt) + 1}</div>` : ''}</td>
     <td><span class="badge ${cls}">${esc(status)}</span>${['queued','processing'].includes(job.status) ? `<div class="mono">${progress}%</div>` : ''}
       ${job.error ? `<div class="batch-error">${esc(uiText(job.error))}</div>` : ''}
@@ -2676,6 +2746,14 @@ async function processBatchJob(batch, job, runner, accountId){
   const alive = () => !!runner && job.runToken === token;
   if (accountId) body.account_id = accountId;
   if (batch.kind === 'video') body.duration = batch.duration;
+  try {
+    if (batch.kind === 'video' && batch.hasReference) body.reference_image=await readBatchReference(batch);
+  } catch(error) {
+    job.status='failed';job.error='MUSE_ACTION_REQUIRED: '+error.message;
+    renderBatchJob(batch,job);
+    return;
+  }
+  if (runner.stop || !alive()) return;
   job.status = 'submitting';
   renderBatchJob(batch, job);
   let result;
@@ -2764,6 +2842,7 @@ async function processBatchJob(batch, job, runner, accountId){
 
 async function runBatch(){
   if (activeBatch && activeBatch.running) return;
+  if (batchReferenceLoading) return toast('Đang đọc ảnh tham chiếu, hãy chờ một chút.','warn');
   const prompts = splitBatchPrompts($('batchPrompts').value);
   if (!prompts.length) return toast('Hãy nhập ít nhất một prompt, mỗi dòng một prompt.', 'warn');
   const kind = $('batchKind').value === 'video' ? 'video' : 'image';
@@ -2771,9 +2850,18 @@ async function runBatch(){
     id:'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2),
     kind, size:$('batchSize').value, duration:Number($('batchDuration').value) || 10,
     concurrency:batchParallelLimit(),
+    hasReference:kind==='video' && !!batchReference,
+    referenceImage:kind==='video' && batchReference ? batchReference.data : null,
+    referenceName:kind==='video' && batchReference ? batchReference.name : '',
     jobs:prompts.map((prompt, offset) => ({prompt, index:batchNextNumber - 1 + offset, status:'waiting', progress:0, createdAt:Math.floor(Date.now()/1000)})),
     stop:false, running:true, next:0, directory:batchDirectory,
   };
+  if (batch.hasReference) {
+    batchReferenceLoading=true;
+    try { await storeBatchReference(batch); }
+    catch(error) { return toast(error.message,'warn'); }
+    finally { batchReferenceLoading=false; }
+  }
   batchNextNumber += prompts.length; batchHistory.push(batch);
   await executeBatchEntries(batch.jobs.map(job=>({batch,job})));
 }
@@ -2873,6 +2961,40 @@ async function rerunBatchJobs(mode, index, options){
   }
 }
 
+const BATCH_FAILED_RETRY_INTERVAL = 20 * 60 * 1000;
+let batchFailedRetryAt = Date.now() + BATCH_FAILED_RETRY_INTERVAL;
+async function requeueFailedBatchJobs(){
+  const now = Date.now();
+  if (now < batchFailedRetryAt || !$('batchAutoRetry').checked) return;
+  // Recovery and manual edits must finish before we replace a task's state.
+  if (batchRestarting || batchRecoveringVideos || batchRecoveryPolling) return;
+  const runner = activeBatch && activeBatch.running ? activeBatch : null;
+  if (runner && (runner.stop || runner.abandoned)) return;
+  const entries = batchEntries().filter(({job}) => job.status === 'failed'
+    && !job.preparing && !job.collecting && !job.checking && !job.reconnecting && !job.editing
+    && job.saveState !== 'saving' && !safeBatchMediaUrl(job.url));
+  batchFailedRetryAt = now + BATCH_FAILED_RETRY_INTERVAL;
+  if (!entries.length) return;
+  for (const {batch,job} of entries) {
+    dropLocalBatchPreview(job.index);
+    const {prompt,index} = job, attempt = (job.attempt || 0) + 1;
+    Object.keys(job).forEach(key => delete job[key]);
+    Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:true,progress:0,createdAt:Math.floor(now/1000)});
+    batch.directory = batchDirectory;
+    if (runner) {
+      job.runToken = runner.token;
+      if (!runner.jobs.includes(job)) runner.jobs.push(job);
+      if (!runner.owners.includes(batch)) runner.owners.push(batch);
+      batch.running = true;
+      batch.stop = false;
+    }
+    renderBatchJob(batch,job);
+  }
+  toast(`Đã đưa ${entries.length} tác vụ lỗi vào hàng chờ chạy lại sau chu kỳ 20 phút.`);
+  if (runner) runner.entries.push(...entries);
+  else await executeBatchEntries(entries);
+}
+
 let batchServerLimits = {total:10, perAccount:5};
 function applyBatchServerLimits(config){
   const total = Math.max(1, Math.floor(Number(config.max_concurrency) || 10));
@@ -2915,8 +3037,10 @@ async function executeBatchEntries(entries){
   activeBatch=runner;
   runner.jobs.forEach(job=>{job.runToken=runner.token;});
   const owners=[...new Set(entries.map(({batch})=>batch))];
+  runner.entries = entries;
+  runner.owners = owners;
   owners.forEach(batch=>{batch.running=true;batch.stop=false;});
-  const controls=['batchStart','batchKind','batchSize','batchDuration','batchConcurrency','batchPrompts','batchChooseFolder','batchClearFolder'];
+  const controls=['batchStart','batchKind','batchSize','batchDuration','batchConcurrency','batchPrompts','batchChooseFolder','batchClearFolder','batchReferenceInput','batchReferenceClear'];
   controls.forEach(id=>{$(id).disabled=true;}); $('batchStop').disabled=false;
   rebuildBatchTable();
   const concurrency = batchParallelLimit();
@@ -3165,7 +3289,11 @@ restoreBatchHistory();
 });
 restoreBatchFolder();
 refreshRecoveredBatchJobs();
-setInterval(() => { refreshRecoveredBatchJobs(); watchRenderedFailures(); }, 4000);
+setInterval(() => {
+  refreshRecoveredBatchJobs();
+  watchRenderedFailures();
+  requeueFailedBatchJobs().catch(error => console.error('Batch retry failed:', error));
+}, 4000);
 refreshAll();
 setInterval(() => {
   loadStatus(); loadPool();
