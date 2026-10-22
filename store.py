@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 
 _LOCK = threading.Lock()
 
 # 决定账号生死的核心 cookie（与 engine.ESSENTIAL_COOKIES 保持一致）
-ESSENTIAL_COOKIES = ("hatch_sess", "hatch_gw", "hatch_vml",
-                     "hatch_native_auth_device")
+ESSENTIAL_COOKIES = ("hatch_sess", "hatch_vml", "hatch_native_auth_device")
+
+
+def _has_essential_cookies(cookies: dict) -> bool:
+    return all((cookies or {}).get(name) for name in ESSENTIAL_COOKIES)
 
 
 def _is_pos(v) -> bool:
@@ -81,77 +85,184 @@ def _read(path: str, default):
         return default
 
 
-def _write(path: str, obj):
-    d = os.path.dirname(path)
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
 class Store:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.accounts: list[dict] = _read(cfg.accounts_file, [])
-        for a in self.accounts:
-            ce = a.get("cookies_exp") or {}
-            if _is_pos(ce.get("hatch_vml")):
-                a["expires_at"] = int(ce["hatch_vml"])
-        self.tasks: dict[str, dict] = _read(cfg.tasks_file, {})
+        self._task_lock = threading.RLock()
+        self._init_task_db()
+
+    @contextmanager
+    def _connect_tasks(self):
+        conn = sqlite3.connect(self.cfg.tasks_db_file, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    def _init_task_db(self):
+        os.makedirs(os.path.dirname(self.cfg.tasks_db_file), exist_ok=True)
+        with self._task_lock, self._connect_tasks() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY, kind TEXT, status TEXT,
+                created_at INTEGER, updated_at INTEGER, payload TEXT NOT NULL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_created_idx ON tasks(created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS tasks_kind_status_idx ON tasks(kind, status)")
+            conn.execute("CREATE TABLE IF NOT EXISTS task_inputs (task_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS task_meta (key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, last_used REAL,
+                use_count INTEGER, payload TEXT NOT NULL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS accounts_enabled_idx ON accounts(enabled, last_used)")
+            conn.execute("CREATE TABLE IF NOT EXISTS account_meta (key TEXT PRIMARY KEY, value TEXT)")
+            migrated = conn.execute("SELECT 1 FROM task_meta WHERE key='json_migrated'").fetchone()
+            if not migrated:
+                legacy = _read(self.cfg.tasks_file, {})
+                if isinstance(legacy, dict):
+                    for task_id, task in legacy.items():
+                        if not isinstance(task, dict):
+                            continue
+                        task = dict(task)
+                        task.setdefault("id", task_id)
+                        conn.execute("INSERT OR IGNORE INTO tasks VALUES (?, ?, ?, ?, ?, ?)",
+                                     (str(task_id), task.get("kind"), task.get("status"),
+                                      int(task.get("created_at") or 0), int(task.get("updated_at") or 0),
+                                      json.dumps(task, ensure_ascii=False)))
+                conn.execute("INSERT INTO task_meta(key,value) VALUES('json_migrated','1')")
+            migrated_accounts = conn.execute("SELECT 1 FROM account_meta WHERE key='json_migrated'").fetchone()
+            if not migrated_accounts:
+                legacy_accounts = _read(self.cfg.accounts_file, [])
+                if isinstance(legacy_accounts, list):
+                    for account in legacy_accounts:
+                        if not isinstance(account, dict) or not account.get("id"):
+                            continue
+                        account = dict(account)
+                        cookies_exp = account.get("cookies_exp") or {}
+                        if _is_pos(cookies_exp.get("hatch_vml")):
+                            account["expires_at"] = int(cookies_exp["hatch_vml"])
+                        conn.execute("INSERT OR IGNORE INTO accounts VALUES (?, ?, ?, ?, ?)",
+                                     (str(account["id"]), int(bool(account.get("enabled", True))),
+                                      account.get("last_used"), int(account.get("use_count") or 0),
+                                      json.dumps(account, ensure_ascii=False)))
+                conn.execute("INSERT INTO account_meta(key,value) VALUES('json_migrated','1')")
 
     # ---------- 账号 ----------
+    def list_usable_account_refs(self) -> list[dict]:
+        """Return scheduling metadata only; do not pull credential payloads into RAM."""
+        query = """SELECT id, last_used, use_count, json_extract(payload,'$.ok') AS ok
+                   FROM accounts WHERE enabled=1
+                   AND json_type(payload,'$.cookies')='object'
+                   AND json_extract(payload,'$.cookies.hatch_sess') IS NOT NULL AND json_extract(payload,'$.cookies.hatch_sess')!=''
+                   AND json_extract(payload,'$.cookies.hatch_vml') IS NOT NULL AND json_extract(payload,'$.cookies.hatch_vml')!=''
+                   AND json_extract(payload,'$.cookies.hatch_native_auth_device') IS NOT NULL AND json_extract(payload,'$.cookies.hatch_native_auth_device')!=''"""
+        with self._connect_tasks() as conn:
+            return [dict(row) for row in conn.execute(query).fetchall()]
+
+    @property
+    def accounts(self) -> list[dict]:
+        """Compatibility accessor; reads from SQLite and does not keep a cache."""
+        with self._connect_tasks() as conn:
+            rows = conn.execute("SELECT payload FROM accounts").fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    @accounts.setter
+    def accounts(self, values: list[dict]):
+        """Compatibility setter for maintenance tools; persisted directly to SQLite."""
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            conn.execute("DELETE FROM accounts")
+            for account in values or []:
+                if not isinstance(account, dict) or not account.get("id"):
+                    continue
+                conn.execute("INSERT INTO accounts VALUES (?, ?, ?, ?, ?)",
+                             (str(account["id"]), int(bool(account.get("enabled", True))),
+                              account.get("last_used"), int(account.get("use_count") or 0),
+                              json.dumps(account, ensure_ascii=False)))
+
     def add_account(self, cookies: dict, label: str = "",
                     cookies_exp: dict | None = None) -> dict:
-        with _LOCK:
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
             aid = uuid.uuid4().hex[:12]
-            exp = {k: int(v) for k, v in (cookies_exp or {}).items()
-                   if _is_pos(v)}
+            exp = {k: int(v) for k, v in (cookies_exp or {}).items() if _is_pos(v)}
             now = int(time.time())
-            acc = {"id": aid, "label": label or aid, "cookies": cookies,
-                   "cookies_exp": exp, "expires_at": account_expiry(exp, now),
-                   "expiry_anchor": None,
-                   "enabled": True, "created_at": now,
-                   "last_used": None, "last_keepalive": None, "use_count": 0,
-                   "ok": None, "note": "", "synced_at": None}
-            self.accounts.append(acc)
-            _write(self.cfg.accounts_file, self.accounts)
-            return acc
+            account = {"id": aid, "label": label or aid, "cookies": cookies,
+                       "cookies_exp": exp, "expires_at": account_expiry(exp, now),
+                       "expiry_anchor": None, "enabled": True, "created_at": now,
+                       "last_used": None, "last_keepalive": None, "use_count": 0,
+                       "ok": None, "note": "", "synced_at": None}
+            conn.execute("INSERT INTO accounts VALUES (?, 1, NULL, 0, ?)",
+                         (aid, json.dumps(account, ensure_ascii=False)))
+            return account
 
     def list_accounts(self) -> list[dict]:
+        query = """SELECT json_remove(payload,'$.cookies') AS payload,
+                   (SELECT COUNT(*) FROM json_each(accounts.payload,'$.cookies')) AS cookie_count,
+                   (json_extract(payload,'$.cookies.hatch_sess') IS NOT NULL AND json_extract(payload,'$.cookies.hatch_sess')!='' AND
+                    json_extract(payload,'$.cookies.hatch_vml') IS NOT NULL AND json_extract(payload,'$.cookies.hatch_vml')!='' AND
+                    json_extract(payload,'$.cookies.hatch_native_auth_device') IS NOT NULL AND json_extract(payload,'$.cookies.hatch_native_auth_device')!='') AS essential_ok
+                   FROM accounts"""
+        with self._connect_tasks() as conn:
+            rows = conn.execute(query).fetchall()
         out = []
-        for a in self.accounts:
-            item = {k: v for k, v in a.items() if k != "cookies"}
-            ce = a.get("cookies_exp") or {}
-            if _is_pos(ce.get("hatch_vml")):
-                item["expires_at"] = int(ce["hatch_vml"])
-            item["cookie_count"] = len(a.get("cookies", {}))
-            item["essential_ok"] = all(
-                a.get("cookies", {}).get(n) for n in ESSENTIAL_COOKIES)
-            # 有效期是 hatch_vml 的实测 expires，还是按「2 天寿命」推算的
-            item["expires_estimated"] = not _is_pos(ce.get("hatch_vml"))
+        for row in rows:
+            item = json.loads(row["payload"])
+            cookies_exp = item.get("cookies_exp") or {}
+            if _is_pos(cookies_exp.get("hatch_vml")):
+                item["expires_at"] = int(cookies_exp["hatch_vml"])
+            item["cookie_count"] = row["cookie_count"]
+            item["essential_ok"] = bool(row["essential_ok"])
+            item["expires_estimated"] = not _is_pos(cookies_exp.get("hatch_vml"))
             out.append(item)
+        order = self._account_order()
+        ranks = {aid: index for index, aid in enumerate(order)}
+        out.sort(key=lambda item: (ranks.get(item["id"], len(ranks)), item["id"]))
         return out
 
+    def _account_order(self, conn=None) -> list[str]:
+        if conn is None:
+            with self._connect_tasks() as db_conn:
+                return self._account_order(db_conn)
+        row = conn.execute("SELECT value FROM account_meta WHERE key='display_order'").fetchone()
+        saved = json.loads(row["value"]) if row else []
+        existing = [row["id"] for row in conn.execute("SELECT id FROM accounts ORDER BY rowid").fetchall()]
+        existing_set = set(existing)
+        saved_set = set()
+        ordered = []
+        for aid in saved:
+            if aid in existing_set and aid not in saved_set:
+                ordered.append(aid)
+                saved_set.add(aid)
+        return ordered + [aid for aid in existing if aid not in saved_set]
+
+    def reorder_accounts(self, ids: list[str]) -> list[str]:
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            existing = [row["id"] for row in conn.execute("SELECT id FROM accounts ORDER BY rowid").fetchall()]
+            requested = [aid for aid in ids if aid in set(existing)]
+            order = requested + [aid for aid in existing if aid not in requested]
+            conn.execute("INSERT INTO account_meta(key,value) VALUES('display_order',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (json.dumps(order),))
+            return order
+
     def delete_account(self, aid: str) -> bool:
-        with _LOCK:
-            n = len(self.accounts)
-            self.accounts = [a for a in self.accounts if a["id"] != aid]
-            _write(self.cfg.accounts_file, self.accounts)
-            return len(self.accounts) != n
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            cur = conn.execute("DELETE FROM accounts WHERE id=?", (aid,))
+            if cur.rowcount:
+                order = [item for item in self._account_order(conn) if item != aid]
+                conn.execute("INSERT INTO account_meta(key,value) VALUES('display_order',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                             (json.dumps(order),))
+            return cur.rowcount > 0
 
     def pick_account(self, preferred_id: str | None = None, rotate: bool = True,
                      force_rotate: bool = False, exclude_id: str | None = None,
                      exclude_ids: set[str] | list[str] | None = None,
                      record_use: bool = True) -> dict | None:
-        """选择可用账号：优先复用当前已预热的健康账号（减少切号重连耗时），每满 15 次或遇错自动轮转。
-        exclude_ids: 需要排除的账号 ID 集合（例如正在被其他并发线程占用的账号）。"""
-        with _LOCK:
-            live = [a for a in self.accounts if a.get("enabled", True) and a.get("cookies")]
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            live = [dict(row) for row in conn.execute(
+                """SELECT id, last_used, use_count, json_extract(payload,'$.ok') AS ok
+                   FROM accounts WHERE enabled=1
+                   AND json_type(payload,'$.cookies')='object'
+                   AND EXISTS (SELECT 1 FROM json_each(accounts.payload,'$.cookies'))""").fetchall()]
             if not live:
                 return None
             blocked = set(exclude_ids or [])
@@ -162,156 +273,235 @@ class Store:
                 if available:
                     live = available
                 elif exclude_ids is not None:
-                    # 并发模式下要求避开所有繁忙账号，但当前无剩余空闲账号
                     return None
                 elif len(live) > 1:
                     live = [a for a in live if a["id"] != exclude_id] or live
+            chosen = None
             if preferred_id and not force_rotate:
-                for a in live:
-                    if a["id"] == preferred_id and a.get("ok") is not False:
+                for ref in live:
+                    if ref["id"] == preferred_id and ref.get("ok") is not False:
                         sticky_n = getattr(self, "_sticky_count", 0) if getattr(self, "_sticky_id", None) == preferred_id else 0
                         if not rotate or sticky_n < 15:
-                            self._sticky_id = preferred_id
-                            self._sticky_count = sticky_n + 1
-                            if record_use:
-                                a["last_used"] = time.time()
-                                a["use_count"] = a.get("use_count", 0) + 1
-                                _write(self.cfg.accounts_file, self.accounts)
-                            return a
-            healthy = [a for a in live if a.get("ok") is not False]
-            candidates = healthy if healthy else live
-            candidates.sort(key=lambda a: (a.get("last_used") or 0.0, a.get("use_count") or 0))
-            acc = candidates[0]
-            self._sticky_id = acc["id"]
-            self._sticky_count = 1
+                            self._sticky_id, self._sticky_count = preferred_id, sticky_n + 1
+                            chosen = ref
+                            break
+            if chosen is None:
+                healthy = [a for a in live if a.get("ok") is not False]
+                candidates = healthy if healthy else live
+                order = self._account_order(conn)
+                ranks = {aid: index for index, aid in enumerate(order)}
+                candidates.sort(key=lambda a: (a.get("last_used") or 0.0,
+                                               a.get("use_count") or 0,
+                                               ranks.get(a["id"], len(ranks))))
+                chosen = candidates[0]
+                self._sticky_id, self._sticky_count = chosen["id"], 1
+            row = conn.execute("SELECT payload FROM accounts WHERE id=?", (chosen["id"],)).fetchone()
+            if not row:
+                return None
+            account = json.loads(row["payload"])
             if record_use:
-                acc["last_used"] = time.time()
-                acc["use_count"] = acc.get("use_count", 0) + 1
-                _write(self.cfg.accounts_file, self.accounts)
-            return acc
+                account["last_used"] = time.time()
+                account["use_count"] = account.get("use_count", 0) + 1
+                self._save_account(conn, account)
+            return account
+
+    @staticmethod
+    def _save_account(conn, account: dict):
+        conn.execute("UPDATE accounts SET enabled=?, last_used=?, use_count=?, payload=? WHERE id=?",
+                     (int(bool(account.get("enabled", True))), account.get("last_used"),
+                      int(account.get("use_count") or 0), json.dumps(account, ensure_ascii=False),
+                      account["id"]))
 
     def touch_keepalive(self, aid: str, ok: bool | None = True, note: str = ""):
-        """ok=None 仅记录未确认的检测；保留上次账号状态、成功保活时间和有效期。"""
-        with _LOCK:
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM accounts WHERE id=?", (aid,)).fetchone()
+            if not row:
+                return
+            account = json.loads(row["payload"])
             now_ts = int(time.time())
-            for a in self.accounts:
-                if a["id"] == aid:
-                    if ok is not None:
-                        a["ok"] = ok
-                    if ok is True:
-                        a["last_keepalive"] = now_ts
-                        # ponytail: 只信实际 Cookie 到期时间或原导入锚点，不凭检测成功虚推 48h。
-                        a["expires_at"] = account_expiry(
-                            a.get("cookies_exp"), a.get("expiry_anchor") or a.get("created_at"))
-                    if note:
-                        a["note"] = note[:300]
-                    a["checked_at"] = now_ts
-            _write(self.cfg.accounts_file, self.accounts)
+            if ok is not None:
+                account["ok"] = ok
+            if ok is True:
+                account["last_keepalive"] = now_ts
+                account["expires_at"] = account_expiry(
+                    account.get("cookies_exp"), account.get("expiry_anchor") or account.get("created_at"))
+            if note:
+                account["note"] = note[:300]
+            account["checked_at"] = now_ts
+            self._save_account(conn, account)
 
     def mark(self, aid: str, ok: bool, note: str = ""):
-        with _LOCK:
-            for a in self.accounts:
-                if a["id"] == aid:
-                    a["ok"] = ok
-                    a["note"] = note[:300]
-                    a["checked_at"] = int(time.time())
-            _write(self.cfg.accounts_file, self.accounts)
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM accounts WHERE id=?", (aid,)).fetchone()
+            if not row:
+                return
+            account = json.loads(row["payload"])
+            account["ok"] = ok
+            account["note"] = note[:300]
+            account["checked_at"] = int(time.time())
+            self._save_account(conn, account)
 
     def get_account(self, aid: str) -> dict | None:
-        for a in self.accounts:
-            if a["id"] == aid:
-                return a
-        return None
+        with self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM accounts WHERE id=?", (aid,)).fetchone()
+        return json.loads(row["payload"]) if row else None
 
     def update_account(self, aid: str, **kw) -> dict | None:
-        """更新标签 / 启用状态 / cookies / 有效期等；值为 None 的字段跳过。
-
-        传了 cookies_exp 会自动重算 expires_at，不用调用方自己算。
-        估算锚点 expiry_anchor 的维护规则（避免有效期被反复虚推）：
-          - 读到了 hatch_vml 的真实 expires  -> 清空锚点，直接用真值；
-          - 读不到且锚点为空                -> 把锚点钉在当下（只钉一次）；
-          - 补入全新会话 cookie（重登）      -> 调用方显式传 expiry_anchor=now 重置。
-        """
-        with _LOCK:
-            for a in self.accounts:
-                if a["id"] == aid:
-                    for k, v in kw.items():
-                        if v is not None:
-                            a[k] = v
-                    if "cookies_exp" in kw and kw["cookies_exp"] is not None:
-                        ce = a["cookies_exp"]
-                        if _is_pos(ce.get("hatch_vml")):
-                            a["expiry_anchor"] = None
-                        elif not a.get("expiry_anchor"):
-                            a["expiry_anchor"] = int(time.time())
-                        a["expires_at"] = account_expiry(
-                            ce, a.get("expiry_anchor") or a.get("created_at"))
-                    _write(self.cfg.accounts_file, self.accounts)
-                    return a
-        return None
+        with _LOCK, self._task_lock, self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM accounts WHERE id=?", (aid,)).fetchone()
+            if not row:
+                return None
+            account = json.loads(row["payload"])
+            for key, value in kw.items():
+                if value is not None:
+                    account[key] = value
+            if "cookies_exp" in kw and kw["cookies_exp"] is not None:
+                expires = account["cookies_exp"]
+                if _is_pos(expires.get("hatch_vml")):
+                    account["expiry_anchor"] = None
+                elif not account.get("expiry_anchor"):
+                    account["expiry_anchor"] = int(time.time())
+                account["expires_at"] = account_expiry(
+                    expires, account.get("expiry_anchor") or account.get("created_at"))
+            self._save_account(conn, account)
+            return account
 
     def stats(self) -> dict:
         now = int(time.time())
-        total = len(self.accounts)
-        enabled = sum(1 for a in self.accounts if a.get("enabled", True))
-        bad = sum(1 for a in self.accounts
-                  if a.get("enabled", True) and a.get("ok") is False)
-        healthy = sum(1 for a in self.accounts
-                      if a.get("enabled", True) and a.get("ok") is True)
-        expiring = sum(1 for a in self.accounts
-                       if a.get("enabled", True)
-                       and a.get("expires_at")
-                       and a["expires_at"] - now < 3 * 86400)
-        expired = sum(1 for a in self.accounts
-                      if a.get("enabled", True)
-                      and a.get("expires_at") and a["expires_at"] <= now)
+        total = self.count_accounts()
+        enabled = self.count_accounts(enabled=True)
+        with self._connect_tasks() as conn:
+            enabled_accounts = conn.execute(
+                """SELECT json_extract(payload,'$.ok') AS ok,
+                          json_extract(payload,'$.expires_at') AS expires_at
+                   FROM accounts WHERE enabled=1""").fetchall()
+        bad = sum(1 for a in enabled_accounts if a["ok"] == 0)
+        healthy = sum(1 for a in enabled_accounts if a["ok"] == 1)
+        expiring = sum(1 for a in enabled_accounts
+                       if a["expires_at"] and a["expires_at"] - now < 3 * 86400)
+        expired = sum(1 for a in enabled_accounts
+                      if a["expires_at"] and a["expires_at"] <= now)
         return {"total": total, "enabled": enabled, "disabled": total - enabled,
                 "healthy": healthy, "error": bad,
                 "expiring": expiring, "expired": expired}
 
+    def count_accounts(self, enabled: bool | None = None) -> int:
+        query, params = "SELECT COUNT(*) FROM accounts", []
+        if enabled is not None:
+            query += " WHERE enabled=?"
+            params.append(int(enabled))
+        with self._connect_tasks() as conn:
+            return int(conn.execute(query, params).fetchone()[0])
+
     # ---------- 任务 ----------
     def create_task(self, kind: str, prompt: str) -> dict:
-        with _LOCK:
+        with self._task_lock, self._connect_tasks() as conn:
             tid = "task_" + uuid.uuid4().hex[:20]
-            t = {"id": tid, "object": "task", "kind": kind, "prompt": prompt,
-                 "status": "queued", "created_at": int(time.time()),
-                 "updated_at": int(time.time()), "result": None, "error": None}
-            self.tasks[tid] = t
-            _write(self.cfg.tasks_file, self.tasks)
-            return t
+            now = int(time.time())
+            task = {"id": tid, "object": "task", "kind": kind, "prompt": prompt,
+                    "status": "queued", "created_at": now, "updated_at": now,
+                    "result": None, "error": None}
+            conn.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?)",
+                         (tid, kind, task["status"], now, now,
+                          json.dumps(task, ensure_ascii=False)))
+            return task
 
     def update_task(self, tid: str, **kw):
-        with _LOCK:
-            t = self.tasks.get(tid)
-            if not t:
+        with self._task_lock, self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM tasks WHERE id=?", (tid,)).fetchone()
+            if not row:
                 return None
-            t.update(kw)
-            t["updated_at"] = int(time.time())
-            _write(self.cfg.tasks_file, self.tasks)
-            return t
+            task = json.loads(row["payload"])
+            task.update(kw)
+            task["updated_at"] = int(time.time())
+            conn.execute("UPDATE tasks SET kind=?, status=?, created_at=?, updated_at=?, payload=? WHERE id=?",
+                         (task.get("kind"), task.get("status"), int(task.get("created_at") or 0),
+                          task["updated_at"], json.dumps(task, ensure_ascii=False), tid))
+            return task
 
     def get_task(self, tid: str) -> dict | None:
-        return self.tasks.get(tid)
+        with self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM tasks WHERE id=?", (tid,)).fetchone()
+        return json.loads(row["payload"]) if row else None
 
-    def list_tasks(self, limit: int = 50) -> list[dict]:
-        items = sorted(self.tasks.values(),
-                       key=lambda t: t.get("created_at") or 0, reverse=True)
-        return items[:limit]
+    def list_tasks(self, limit: int | None = 50, *, kind: str | None = None,
+                   statuses: tuple[str, ...] | None = None) -> list[dict]:
+        clauses, params = [], []
+        if kind is not None:
+            clauses.append("kind=?")
+            params.append(kind)
+        if statuses is not None:
+            if not statuses:
+                return []
+            clauses.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+            params.extend(statuses)
+        query = "SELECT payload FROM tasks"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(0, int(limit)))
+        with self._connect_tasks() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def find_task(self, field: str, value):
+        if field not in {"image_request_key"}:
+            raise ValueError("Unsupported task lookup field")
+        with self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM tasks WHERE json_extract(payload, ?) = ? ORDER BY created_at DESC LIMIT 1",
+                               ("$." + field, value)).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def count_tasks(self, *, kind: str | None = None,
+                    statuses: tuple[str, ...] | None = None) -> int:
+        clauses, params = [], []
+        if kind is not None:
+            clauses.append("kind=?")
+            params.append(kind)
+        if statuses is not None:
+            if not statuses:
+                return 0
+            clauses.append("status IN (" + ",".join("?" for _ in statuses) + ")")
+            params.extend(statuses)
+        query = "SELECT COUNT(*) FROM tasks" + (" WHERE " + " AND ".join(clauses) if clauses else "")
+        with self._connect_tasks() as conn:
+            return int(conn.execute(query, params).fetchone()[0])
+
+    def set_task_input(self, tid: str, **values) -> None:
+        with self._task_lock, self._connect_tasks() as conn:
+            conn.execute("INSERT INTO task_inputs(task_id,payload) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET payload=excluded.payload",
+                         (tid, json.dumps(values, ensure_ascii=False)))
+
+    def get_task_input(self, tid: str) -> dict:
+        with self._connect_tasks() as conn:
+            row = conn.execute("SELECT payload FROM task_inputs WHERE task_id=?", (tid,)).fetchone()
+        return json.loads(row["payload"]) if row else {}
+
+    def delete_task_input(self, tid: str | None = None) -> int:
+        with self._task_lock, self._connect_tasks() as conn:
+            if tid is None:
+                cur = conn.execute("DELETE FROM task_inputs")
+            else:
+                cur = conn.execute("DELETE FROM task_inputs WHERE task_id=?", (tid,))
+            return max(0, cur.rowcount)
+
+    def prune_task_inputs(self) -> int:
+        with self._task_lock, self._connect_tasks() as conn:
+            cur = conn.execute("DELETE FROM task_inputs WHERE task_id NOT IN (SELECT id FROM tasks WHERE status IN ('queued','processing'))")
+            return max(0, cur.rowcount)
 
     def delete_task(self, tid: str) -> bool:
-        with _LOCK:
-            if tid in self.tasks:
-                del self.tasks[tid]
-                _write(self.cfg.tasks_file, self.tasks)
-                return True
-            return False
+        with self._task_lock, self._connect_tasks() as conn:
+            cur = conn.execute("DELETE FROM tasks WHERE id=?", (tid,))
+            conn.execute("DELETE FROM task_inputs WHERE task_id=?", (tid,))
+            return cur.rowcount > 0
 
     def clear_tasks(self, keep: int = 0) -> int:
-        with _LOCK:
-            items = sorted(self.tasks.values(),
-                           key=lambda t: t.get("created_at") or 0, reverse=True)
-            keep_ids = {t["id"] for t in items[:keep]}
-            removed = len(self.tasks) - len(keep_ids)
-            self.tasks = {k: v for k, v in self.tasks.items() if k in keep_ids}
-            _write(self.cfg.tasks_file, self.tasks)
-            return max(0, removed)
+        keep = max(0, int(keep))
+        with self._task_lock, self._connect_tasks() as conn:
+            cur = conn.execute("DELETE FROM tasks WHERE id NOT IN (SELECT id FROM tasks ORDER BY created_at DESC LIMIT ?)",
+                               (keep,))
+            conn.execute("DELETE FROM task_inputs WHERE task_id NOT IN (SELECT id FROM tasks)")
+            return max(0, cur.rowcount)

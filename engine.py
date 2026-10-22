@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+
 import base64
 import hashlib
 import mimetypes
@@ -36,7 +37,43 @@ PAGE_CLIP_BYTES = 357801
 PAGE_CLIP_SHA256 = "ace1b168a5cb90ac8f8c6316961aef6d8ccfdb3c3a8754057d995199365f6b2f"
 
 
-def validate_video_file(path: str) -> None:
+def _trim_video_file(path: str, expected_duration: int) -> None:
+    """Accurately re-encode an overlong download to the requested duration.
+
+    Stream-copy trimming can retain the original stream duration (or cut only
+    at a keyframe), so it is not suitable for validating the delivered clip.
+    """
+    import imageio_ffmpeg
+
+    temp_path = f"{path}.trim{os.path.splitext(path)[1]}"
+    ext = os.path.splitext(path)[1].lower()
+    video_codec = "libvpx-vp9" if ext == ".webm" else "libx264"
+    audio_codec = "libopus" if ext == ".webm" else "aac"
+    command = [
+        imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-y", "-i", path,
+        "-t", f"{float(expected_duration):.3f}", "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", video_codec,
+    ]
+    if video_codec == "libx264":
+        command.extend(["-preset", "veryfast", "-crf", "18"])
+    else:
+        command.extend(["-deadline", "good", "-cpu-used", "4", "-crf", "32"])
+    command.extend(["-c:a", audio_codec])
+    if ext in (".mp4", ".mov"):
+        command.extend(["-movflags", "+faststart"])
+    command.append(temp_path)
+    try:
+        subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=90, check=True)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+
+
+def validate_video_file(path: str, expected_duration: int = 10) -> None:
     """Reject wrong clips before delivery, allowing only timestamp rounding."""
     try:
         import imageio_ffmpeg
@@ -50,8 +87,19 @@ def validate_video_file(path: str) -> None:
             raise ValueError("Không đọc được thời lượng video")
         hours, minutes, seconds = map(float, duration_match.groups())
         duration = hours * 3600 + minutes * 60 + seconds
-        if not math.isfinite(duration) or abs(duration - 10.0) > 0.05:
-            raise ValueError(f"Video dài {duration:.2f}s; yêu cầu 10s")
+        if duration > float(expected_duration) + 0.05:
+            _trim_video_file(path, expected_duration)
+            probe = subprocess.run(
+                [imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-i", path],
+                capture_output=True, text=True, errors="replace", timeout=20)
+            duration_match = re.search(
+                r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe.stderr)
+            if not duration_match:
+                raise ValueError("Could not read duration after trimming")
+            hours, minutes, seconds = map(float, duration_match.groups())
+            duration = hours * 3600 + minutes * 60 + seconds
+        if not math.isfinite(duration) or abs(duration - float(expected_duration)) > 0.05:
+            raise ValueError(f"Video dài {duration:.2f}s; yêu cầu {expected_duration}s")
         if file_is_page_clip(path):
             raise ValueError("Đây là video icon của Muse AI")
     except Exception as exc:
@@ -76,8 +124,15 @@ def file_is_page_clip(path: str) -> bool:
         return False
 
 # 决定账号生死的核心 cookie（缺失或过期 = 会话失效）
-ESSENTIAL_COOKIES = ("hatch_sess", "hatch_gw", "hatch_vml",
-                     "hatch_native_auth_device")
+ESSENTIAL_COOKIES = ("hatch_sess", "hatch_vml", "hatch_native_auth_device")
+
+
+def missing_essential_cookies(cookies: dict) -> list[str]:
+    return [name for name in ESSENTIAL_COOKIES if not (cookies or {}).get(name)]
+
+
+def has_essential_cookies(cookies: dict) -> bool:
+    return not missing_essential_cookies(cookies or {})
 
 
 class MuseAuthError(RuntimeError):
@@ -94,7 +149,7 @@ class MuseEngine:
         self.proc: subprocess.Popen | None = None
         self.browser: CDP | None = None
         self._local = threading.local()
-        self._start_lock = threading.Lock()
+        self._start_lock = threading.RLock()
         self._active_contexts: set[str] = set()
         self._contexts_lock = threading.Lock()
         self.task_views = TaskSessionViews(
@@ -179,6 +234,12 @@ class MuseEngine:
         return f"http://127.0.0.1:{self.cfg.cdp_port}/json/version"
 
     def start(self):
+        # Serialize the full launch path; concurrent tasks must not race to spawn
+        # multiple Chromium instances against the same profile and CDP port.
+        with self._start_lock:
+            self._start_locked()
+
+    def _start_locked(self):
         with self._start_lock:
             if self.proc and self.proc.poll() is None and self.browser:
                 return
@@ -244,18 +305,33 @@ class MuseEngine:
                         except Exception:
                             pass
                     self._active_contexts.clear()
+                # CDP may be attached to Chrome left by a previous service process
+                # (self.proc is None); the configured CDP port/profile is owned here.
+                try:
+                    self.browser.send("Browser.close", timeout=5)
+                except Exception:
+                    pass
                 try:
                     self.browser.close()
                 except Exception:
                     pass
                 self.browser = None
             if self.proc and self.proc.poll() is None:
-                self.proc.terminate()
                 try:
-                    self.proc.wait(timeout=10)
+                    self.proc.wait(timeout=5)
                 except Exception:  # noqa: BLE001
-                    self.proc.kill()
+                    self.proc.terminate()
+                    try:
+                        self.proc.wait(timeout=5)
+                    except Exception:
+                        self.proc.kill()
             self.proc = None
+            if self._log:
+                try:
+                    self._log.close()
+                except Exception:
+                    pass
+                self._log = None
 
     # ---------------- 页面 ----------------
     def _close_page(self):
@@ -336,7 +412,7 @@ class MuseEngine:
     @staticmethod
     def renew_session_http(cookies: dict, expires: dict | None = None,
                            wake_vm: bool = True) -> dict:
-        """直接调用 muse.ai/api/session 续签 hatch_vml (+48h) / hatch_sess (+30d) / hatch_gw (+1y)，
+        """直接调用 muse.ai/api/session 续签 hatch_vml / hatch_sess，
         并按需调用 /api/hatch/vm/wake 唤醒云端工作区 VM。"""
         import requests
         cur_cookies = dict(cookies or {})
@@ -1331,9 +1407,12 @@ class MuseEngine:
             raw_res = self.page.js(_INJECT_JS % (json.dumps(b64), json.dumps(mime)))
             res_obj = json.loads(raw_res) if isinstance(raw_res, str) else raw_res
             if not res_obj.get("ok"):
-                raise MuseGenerationError("附加参考图失败，已停止生成")
+                detail = str(res_obj.get("err") or "unknown uploader error")
+                raise MuseGenerationError(f"附加参考图失败，已停止生成（{detail}）")
+        except MuseGenerationError:
+            raise
         except Exception as e:
-            raise MuseGenerationError("附加参考图失败，已停止生成") from e
+            raise MuseGenerationError(f"附加参考图失败，已停止生成（{e}）") from e
 
         # 等待输入框附件确认；历史图片不能证明本次上传成功。
         # 现网 UI 已切中文：确认按钮 aria-label = "附加文件"/"移除附件"；
@@ -1383,11 +1462,15 @@ class MuseEngine:
     def generate(self, cookies: dict, prompt: str, expect: str = "image",
                  timeout: int = 240, expires: dict | None = None, account_id: str | None = None,
                  on_progress=None, reference_image: str | None = None,
-                 stop_event=None) -> dict:
+                 stop_event=None, expected_duration: int = 10) -> dict:
+        if stop_event is not None and stop_event.is_set():
+            raise MuseGenerationError("Generation cancelled by user")
         self._local.generation_submitted = False
         self._local.generation_url = None
         deadline = time.monotonic() + timeout
         self.ensure_page(cookies, expires, account_id=account_id)
+        if stop_event is not None and stop_event.is_set():
+            raise MuseGenerationError("Generation cancelled by user")
         self.reset_thread(for_chat=False)
         self.bind_task_view()
         self._scroll_bottom()
@@ -1400,6 +1483,8 @@ class MuseEngine:
         base = atts_before[-1] if atts_before else {}
         baseline_src = base.get("src") or ""
         base_agent_cnt = self._agent_count()
+        if stop_event is not None and stop_event.is_set():
+            raise MuseGenerationError("Generation cancelled by user")
         if time.monotonic() >= deadline:
             raise MuseGenerationError("任务准备超时，已停止发送")
         if self._send(prompt) not in ("clicked", "enter-sent"):
@@ -1417,7 +1502,7 @@ class MuseEngine:
         try:
             if not att:
                 raise MuseGenerationError("等待生成超时，未出现新的生成结果")
-            result = self._deliver_attachment(att, expect)
+            result = self._deliver_attachment(att, expect, expected_duration=expected_duration)
             if expect == "video" and file_is_page_clip(result.get("path") or ""):
                 try:
                     os.remove(result["path"])
@@ -1426,12 +1511,15 @@ class MuseEngine:
                 raise MuseGenerationError("检测到 Muse 公用视频片段，不是本次任务结果")
             return result
         except MuseGenerationError as generation_error:
+            if stop_event is not None and stop_event.is_set():
+                raise MuseGenerationError("Generation cancelled by user") from generation_error
             muse_url = (self.generation_context() or {}).get("muse_url")
             if muse_url:
                 try:
                     return self.collect_rendered(
                         cookies, muse_url, expect=expect, expires=expires,
-                        account_id=account_id, timeout=60)
+                        account_id=account_id, timeout=60,
+                        expected_duration=expected_duration)
                 except MuseGenerationError as recovery_error:
                     log.info("按会话回收已生成媒体失败: %s", recovery_error)
             self._debug_dump("no-attachment")
@@ -1551,7 +1639,7 @@ class MuseEngine:
 
     def collect_rendered(self, cookies: dict, url: str, expect: str = "video",
                          expires: dict | None = None, account_id: str | None = None,
-                         timeout: int = 60) -> dict:
+                         timeout: int = 60, expected_duration: int = 10) -> dict:
         """Download a file Muse already rendered. Never sends the prompt again."""
         parsed = urlsplit(url or "")
         if not (parsed.scheme == "https" and parsed.hostname in ("muse.ai", "www.muse.ai")
@@ -1572,7 +1660,7 @@ class MuseEngine:
                 continue
             selected = (att.get("vSrc") if expect == "video" else None) or att.get("src") or ""
             try:
-                result = self._deliver_attachment(att, expect)
+                result = self._deliver_attachment(att, expect, expected_duration=expected_duration)
             except MuseGenerationError:
                 if selected:
                     skipped.add(selected)
@@ -1590,7 +1678,7 @@ class MuseEngine:
         label = "video" if expect == "video" else "ảnh"
         raise MuseGenerationError(f"Cuộc trò chuyện chưa có {label} đã render để lấy về.")
 
-    def _deliver_attachment(self, att: dict, expect: str) -> dict:
+    def _deliver_attachment(self, att: dict, expect: str, expected_duration: int = 10) -> dict:
         os.makedirs(self.cfg.media_dir, exist_ok=True)
         log.info("Media download starting: kind=%s", expect)
         download_started = time.monotonic()
@@ -1611,10 +1699,10 @@ class MuseEngine:
             if expect == "video" and kind != "video":
                 raise MuseGenerationError(f"期望生成视频，但提取成品类型为图片 ({ext})，拒绝以图片冒充视频交付")
             if kind == "video":
-                validate_video_file(dst)
+                validate_video_file(dst, expected_duration=expected_duration)
             return {"path": dst, "filename": name, "size": len(data), "ext": ext, "mime": mime,
                     "kind": kind,
-                    "via": "blob", "attachment": att.get("tid"),
+                    "via": "blob", "attachment": att.get("tid"), "source_url": url or selected_src,
                     "w": att.get("w"), "h": att.get("h")}
 
         path = self._download_fallback(selected_src)
@@ -1630,10 +1718,10 @@ class MuseEngine:
         if expect == "video" and kind != "video":
             raise MuseGenerationError(f"期望生成视频，但下载成品类型为图片 ({ext})，拒绝以图片冒充视频交付")
         if kind == "video":
-            validate_video_file(dst)
+            validate_video_file(dst, expected_duration=expected_duration)
         return {"path": dst, "filename": name, "size": os.path.getsize(dst), "ext": ext, "mime": "",
                 "kind": kind,
-                "via": "download", "attachment": att.get("tid"),
+                "via": "download", "attachment": att.get("tid"), "source_url": selected_src,
                 "w": att.get("w"), "h": att.get("h")}
 
     @staticmethod

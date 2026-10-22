@@ -1,8 +1,7 @@
 /* Muse2API Cookie 导入 —— 读取 muse.ai 的 cookie 并 POST 到 muse2api 服务。
  *
  * 关键点：用 chrome.cookies 而不是 document.cookie。
- * muse.ai 的 4 条核心 cookie（hatch_sess / hatch_gw / hatch_vml /
- * hatch_native_auth_device）都带 httpOnly，网页 JS 读不到，
+ * muse.ai 的核心 cookie 由 chrome.cookies 读取，网页 JS 读不到 httpOnly 项，
  * 只有浏览器扩展的 cookies 接口能拿到。
  */
 
@@ -14,7 +13,12 @@ const DEFAULT_CFG = Object.freeze({
   label: 'muse-main',
 });
 
-const ESSENTIAL = ['hatch_sess', 'hatch_gw', 'hatch_vml', 'hatch_native_auth_device'];
+const ESSENTIAL = ['hatch_sess', 'hatch_vml', 'hatch_native_auth_device'];
+
+function missingEssential(cookies) {
+  const missing = ESSENTIAL.filter((n) => !cookies[n]);
+  return missing;
+}
 
 function log(html, cls) {
   const el = $('log');
@@ -92,7 +96,7 @@ async function run() {
       return log('没读到 muse.ai 的 Cookie。\n请先在这个浏览器里打开并登录 '
                  + 'https://muse.ai/ ，再回来点一次。', 'bad');
     }
-    const missing = ESSENTIAL.filter((n) => !(n in cookies));
+    const missing = missingEssential(cookies);
     if (missing.length) {
       log(`读到 ${names.length} 条 Cookie，但缺核心项：${missing.join('、')}\n`
           + '说明这个浏览器还没登录成功。请登录到能看到聊天界面再试。', 'warn');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Muse2API Cookie 导入助手
 // @namespace    https://github.com/czg86389-hub/muse2api
-// @version      1.1.0
+// @version      1.1.1
 // @description  在 muse.ai 网页上一键导出并推送核心 Cookie 至 muse2api 账号池，支持现代化悬浮面板、状态指示与剪贴板备份
 // @author       MUSE2API Contributors
 // @match        https://muse.ai/*
@@ -20,7 +20,8 @@
   'use strict';
 
   const STORE_KEY = '***';
-  const ESSENTIAL = ['hatch_sess', 'hatch_gw', 'hatch_vml'];
+  const ESSENTIAL = ['hatch_sess', 'hatch_vml', 'hatch_native_auth_device'];
+  const missingEssential = (cookies) => ESSENTIAL.filter(n => !cookies[n]);
 
   function loadCfg() {
     const fallback = {
@@ -118,7 +119,7 @@
 
   async function checkSessionStatus() {
     const { cookies } = await getCookies();
-    const missing = ESSENTIAL.filter(n => !(n in cookies));
+    const missing = missingEssential(cookies);
     const hasCore = missing.length === 0;
     return { hasCore, count: Object.keys(cookies).length, missing, cookies };
   }
@@ -143,7 +144,7 @@
         return;
       }
 
-      const missing = ESSENTIAL.filter(n => !(n in cookies));
+      const missing = missingEssential(cookies);
       if (missing.length) {
         showToast(`读到 ${names.length} 条 Cookie，但缺核心项：${missing.join(', ')}。请刷新页面重试。`, 'err');
         return;
@@ -200,6 +201,11 @@
       }
 
       const a = (data.added && data.added[0]) || {};
+      if (data.warning) {
+        showToast(data.warning, 'err');
+        updateStatusBadge();
+        return;
+      }
       const expDate = a.expires_at ? new Date(a.expires_at * 1000).toLocaleDateString() : '有效';
       showToast(`✓ 账号成功导入 muse2api！\nID: ${a.id || '?'}\n有效期至: ${expDate}`, 'ok');
       updateStatusBadge();

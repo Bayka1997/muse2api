@@ -25,7 +25,7 @@
     position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);
     background:rgba(10,14,23,.82);border-bottom:1px solid var(--line);
   }
-  .hwrap{max-width:1280px;margin:0 auto;padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .hwrap{width:100%;max-width:none;margin:0;padding:14px clamp(12px,1.6vw,28px);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
   .logo{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-weight:650;font-size:17px;letter-spacing:.2px}
   .logo .dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--purple));box-shadow:0 0 14px rgba(79,140,255,.8)}
   .logo small{color:var(--muted);font-weight:400;font-size:12px;margin-left:2px}
@@ -44,7 +44,7 @@
   .keybox button{padding:5px 10px;font-size:12px}
 
   /* ---------- Bố cục ---------- */
-  main{max-width:1280px;margin:0 auto;padding:22px}
+  main{width:100%;max-width:none;margin:0;padding:22px clamp(12px,1.6vw,28px)}
   nav.tabs{display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:0}
   nav.tabs button{
     background:transparent;border:0;border-bottom:2px solid transparent;color:var(--muted);
@@ -186,6 +186,8 @@
   .keybox.miss .lbl{color:var(--warn)}
   .updpill-alert{border-color:rgba(251,191,36,.8)!important;background:rgba(251,191,36,.15)!important;color:var(--warn)!important;animation:pulse 1.6s infinite}
   .batch-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .batch-card-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:0}
+  .batch-card-header h3{margin:0}
   .batch-toolbar .batch-filters{display:flex;gap:5px;flex-wrap:wrap;margin-right:auto}
   .batch-filters button.active{border-color:var(--accent);color:var(--accent);background:rgba(79,140,255,.12)}
   .batch-table{min-width:1050px}.batch-table td{padding:12px 10px}
@@ -215,14 +217,9 @@
   <div class="hwrap">
     <div class="logo">
       <span class="dot"></span>muse2api <small>Hạn mức Muse web · Proxy API</small>
-      <a href="https://github.com/czg86389-hub/muse2api" target="_blank" class="pill" style="margin-left:10px;text-decoration:none;color:var(--text);border-color:var(--line2);cursor:pointer" title="Mở kho mã nguồn trên GitHub (https://github.com/czg86389-hub/muse2api)">
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" style="vertical-align:-2px"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <b>Kho GitHub</b>
-      </a>
       <a href="https://linux.do/" target="_blank" class="pill" style="text-decoration:none;color:var(--text);border-color:var(--line2);cursor:pointer" title="Cộng đồng và liên kết: Cộng đồng LINUX DO (https://linux.do/)">
         🤝 <b>LINUX DO</b>
       </a>
-      <button class="ghost mini" onclick="toggleRepoPanel()" id="btnRepoTop" style="display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 11px;font-size:12px" title="Xem phiên bản mới nhất và thông báo cập nhật">
         📦 <span id="repoTopTxt">Kiểm tra phiên bản</span>
       </button>
     </div>
@@ -242,39 +239,6 @@
 
 <main>
   <!-- Thông báo cập nhật khi kho chính thức có commit mới/hoặc phiên bản mới -->
-  <div class="banner" id="updateBanner" style="border-color:rgba(79,140,255,.65);background:linear-gradient(90deg,rgba(79,140,255,.16),rgba(167,139,250,.05));align-items:center;justify-content:space-between;flex-wrap:wrap">
-    <div style="display:flex;gap:12px;align-items:flex-start;flex:1;min-width:260px">
-      <span class="ic">🔔</span>
-      <div>
-        <b style="color:#60a5fa">Đã phát hiện muse2api kho chính thức có phiên bản mới!</b>
-        <span id="updBannerVer" class="badge info" style="margin-left:8px">Phiên bản mới</span><br>
-        <span id="updBannerMsg" style="color:var(--muted);font-size:13px">Kho chính thức có tính năng mới hoặc cải thiện hiệu năng. Nhấn nút bên phải để cập nhật trực tuyến (tự động giữ lại .env khóa và dữ liệu tài khoản).</span>
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button onclick="upgradeNow()" id="btnBannerUpgrade">⚡ Cập nhật và khởi động lại</button>
-      <button class="ghost mini" onclick="toggleRepoPanel()">Xem nội dung cập nhật</button>
-      <button class="ghost mini" onclick="dismissUpdateBanner()">Ẩn thông báo</button>
-    </div>
-  </div>
-
-  <!-- Bảng phiên bản và cập nhật -->
-  <div class="card" id="repoPanel" style="display:none;border-color:rgba(79,140,255,.45);margin-bottom:16px">
-    <h3>
-      <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-      Kiểm tra phiên bản và cập nhật trực tuyến
-      <a href="https://github.com/czg86389-hub/muse2api" target="_blank" class="tag" style="color:var(--accent)">czg86389-hub/muse2api ↗</a>
-      <span id="repoBadge" class="badge info" style="margin-left:auto">Đang kiểm tra…</span>
-    </h3>
-    <div class="hint" id="repoStatusDesc">Đang so sánh phiên bản hiện tại với phiên bản mới nhất trên kho GitHub chính thức… (cập nhật tự động giữ lại <code>.env</code> khóa và <code>data/</code> dữ liệu tài khoản, media)</div>
-    <div id="repoCommitsBox" style="margin-top:10px;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:10px 14px;font-size:12.5px"></div>
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button onclick="upgradeNow()" id="btnRepoPull">⚡ Lấy từ GitHub để cập nhật và khởi động lại</button>
-      <button class="ghost" onclick="loadRepoStatus(true)">🔍 Kiểm tra cập nhật ngay</button>
-      <a href="https://github.com/czg86389-hub/muse2api/commits/main" target="_blank" class="btnlike ghostlike" style="padding:7px 13px;font-size:12.5px">Xem toàn bộ lịch sử commit trên GitHub ↗</a>
-    </div>
-  </div>
-
   <div class="banner" id="authBanner">
     <span class="ic">🔑</span>
     <div>
@@ -288,17 +252,157 @@
   </div>
 
   <nav class="tabs">
-    <button class="active" data-t="pool">Nhóm tài khoản</button>
+    <button class="active" data-t="batch">Chạy hàng loạt</button>
+    <button data-t="image-video">Image to Video</button>
+    <button data-t="assembly">Ghép video</button>
+    <button data-t="pool">Nhóm tài khoản</button>
     <button data-t="cookie">Lấy Cookie</button>
     <button data-t="tasks">Lịch sử tác vụ</button>
     <button data-t="media">Thư viện media</button>
     <button data-t="play">Thử API</button>
-    <button data-t="batch">Chạy hàng loạt</button>
     <button data-t="docs">Tài liệu tích hợp</button>
   </nav>
 
+  <!-- ==================== Chạy hàng loạt ==================== -->
+  <section class="tab active" id="tab-batch">
+    <div id="batchPanel">
+    <div class="card">
+      <div class="batch-card-header"><h3>Chạy hàng loạt · Mỗi dòng một prompt</h3><button type="button" class="ghost mini" id="batchSetupToggle" onclick="toggleBatchSetup()" aria-expanded="false" aria-controls="batchSetupBody">Mở rộng</button></div>
+      <div id="batchSetupBody" hidden>
+      <div class="hint">Dán danh sách prompt, chọn tạo ảnh hoặc video rồi bắt đầu. Dòng trống được bỏ qua; mỗi dòng còn lại tạo một tác vụ riêng. Giữ trang mở để tiếp tục gửi các dòng đang chờ.</div>
+      <div class="row">
+        <div><label>Loại nội dung</label><select id="batchKind" onchange="updateBatchOptions(); saveBatchSettings()"><option value="image">Ảnh</option><option value="video">Video</option></select></div>
+        <div><label>Tỷ lệ</label><select id="batchSize"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></div>
+        <div id="batchDurationField" style="display:none"><label>Thời lượng video (giây)</label><select id="batchDuration"><option>5</option><option>6</option><option>8</option><option value="10" selected>10</option></select></div>
+        <div><label>Số tác vụ đồng thời</label><select id="batchConcurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
+      </div>
+      <label style="margin-top:14px">Danh sách prompt</label>
+      <div id="batchReferenceField" style="display:none;margin:12px 0">
+        <label>Ảnh tham chiếu dùng chung cho toàn bộ prompt video</label>
+        <input id="batchReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseBatchReference(this)">
+        <div id="batchReferencePreview"></div>
+        <button id="batchReferenceClear" class="ghost mini" onclick="clearBatchReference()">Bỏ ảnh tham chiếu</button>
+        <div class="hint">PNG, JPG hoặc WebP, tối đa 10 MB. Ảnh được giữ cùng đợt chạy để dùng lại khi xử lý video lỗi.</div>
+      </div>
+      <textarea id="batchPrompts" rows="8" oninput="saveBatchPromptDraft(); updateBatchStartLabel()" placeholder="Một chú mèo cam đi trên bãi cỏ dưới nắng
+Một ngôi nhà gỗ giữa rừng thông
+Một thành phố tương lai dưới ánh đèn neon"></textarea>
+      <div class="hint" id="batchConcurrencyHint">Chọn giới hạn tác vụ đồng thời toàn hệ thống từ 1 đến 10. Tăng số tác vụ có thể làm tăng mức sử dụng RAM.</div>
+      <label><input type="checkbox" id="batchAutoRetry" checked onchange="saveBatchSettings()"> Tự xử lý lại video lỗi khi hàng chờ còn chỗ và đưa toàn bộ ảnh/video lỗi vào hàng chờ mỗi 20 phút</label>
+      <div class="hint">Ưu tiên prompt đang chờ, lấy video đã có trước khi tạo lại. Mỗi video lỗi được tự thử lại một lần trong mỗi đợt chạy.</div>
+      <div style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:9px">
+        <label>Nơi lưu kết quả trên máy bạn</label>
+        <div class="acts">
+          <button class="ghost" id="batchChooseFolder" onclick="chooseBatchFolder()" title="Chọn thư mục để tự động lưu kết quả">Chọn thư mục tải xuống</button>
+          <button class="ghost" id="batchClearFolder" onclick="clearBatchFolder()" disabled>Dùng thư mục tải xuống của trình duyệt</button>
+        </div>
+        <div id="batchFolderLabel" class="hint" style="margin:8px 0 0" aria-live="polite">Chưa chọn thư mục. Bấm “Tải xuống” ở từng kết quả để lưu theo cài đặt trình duyệt.</div>
+        <div class="hint" style="margin:6px 0 0">Khi đã chọn thư mục, mỗi kết quả được tự động lưu vào đó và thư mục vẫn được giữ sau khi tải lại trang. Bấm ảnh đã lưu để xem lớn. Chọn thư mục trực tiếp cần Chrome/Edge trên HTTPS hoặc localhost. Với địa chỉ HTTP trên máy chủ khác, hãy bật “Hỏi nơi lưu từng tệp” trong cài đặt tải xuống của trình duyệt.</div>
+      </div>
+      <div class="acts" style="margin-top:12px">
+        <button id="batchStart" class="primary-lg" onclick="runBatch()">Chạy 0 prompt</button>
+        <button id="batchPause" class="ghost" onclick="pauseBatch()" disabled>Tạm dừng</button>
+        <button id="batchResume" class="primary" onclick="resumeBatch()" disabled>Chạy tiếp</button>
+        <button id="batchStop" class="danger" onclick="stopBatch()" disabled>Dừng gửi thêm</button>
+        <button id="batchReset" class="ghost" onclick="resetBatchNumbering()" disabled>Xóa danh sách và reset STT</button>
+      </div>
+      <div class="hint">STT cộng dồn qua các đợt và được ghi nhớ khi tải lại trang. Sau F5, UI tự lấy trạng thái tác vụ đã gửi và cập nhật mỗi 4 giây; không gửi lại yêu cầu tạo video. Chỉ xóa danh sách/reset khi mọi tác vụ đã kết thúc và kết quả thành công đã tải xong. Thao tác này giữ nguyên tệp đã lưu và lịch sử trên máy chủ. Nếu tên file đã tồn tại sau khi reset, file mới được thêm hậu tố để tránh ghi đè.</div>
+      <div id="batchSummary" class="hint" style="margin-top:14px" aria-live="polite">Chưa có đợt chạy.</div>
+      <div class="hint">“Dừng gửi thêm” giữ các dòng đang chờ lượt lại trong danh sách; tác vụ đã gửi vẫn tiếp tục và được theo dõi. Kết quả đã gửi cũng có trong “Lịch sử tác vụ” và “Thư viện media”.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="batch-toolbar">
+        <div class="batch-filters">
+          <button class="ghost mini active" id="batchFilterAll" onclick="setBatchFilter('all')">Tất cả (0)</button>
+          <button class="ghost mini" id="batchFilterSending" onclick="setBatchFilter('sending')">Đang gửi (0)</button>
+          <button class="ghost mini" id="batchFilterWaiting" onclick="setBatchFilter('waiting')">Đang chờ lượt (0)</button>
+          <button class="ghost mini" id="batchFilterCompleted" onclick="setBatchFilter('completed')">Hoàn thành (0)</button>
+          <button class="ghost mini" id="batchFilterFailed" onclick="setBatchFilter('failed')">Lỗi (0)</button>
+          <button class="ghost mini" id="batchFilterRecovery" onclick="setBatchFilter('recovery')">Chờ lấy lại (0)</button>
+        </div>
+        <input type="text" id="batchSearch" placeholder="Tìm STT hoặc prompt…" oninput="applyBatchFilter()" style="width:190px">
+        <button class="ghost mini" id="batchRetryAll" onclick="rerunBatchJobs('all')" disabled>Tạo lại tất cả</button>
+        <button class="ghost mini" id="batchRetryFailed" onclick="rerunBatchJobs('failed')" disabled>Tạo lại prompt lỗi</button>
+        <button class="ghost mini" id="batchCollectRendered" onclick="collectRenderedFailures()" disabled>Lấy file đã render</button>
+        <button class="ghost mini" id="batchRecoverVideos" onclick="recoverFailedVideos()" disabled>Lấy lại toàn bộ video lỗi</button>
+        <button class="ghost mini" id="batchReconnect" onclick="reconnectInterrupted()" disabled>Nối lại bị ngắt</button>
+        <button class="ghost mini" id="batchDownloadPending" onclick="downloadPendingVideos()" disabled>Tải toàn bộ video chưa tải</button>
+        <button class="ghost mini" id="batchDownloadAll" onclick="downloadAllVideos()" disabled>Tải toàn bộ</button>
+        <button class="ghost mini" id="batchDeleteDone" onclick="deleteFinishedBatchJobs()" disabled>Xóa đã xong</button>
+        <button class="danger mini" id="batchDeleteAll" onclick="deleteAllBatchJobs()" disabled>Xóa toàn bộ</button>
+      </div>
+      <div class="hint">Các dòng mới sẽ vào “Đang chờ lượt” và được gửi dần theo số luồng đã đặt. “Nối lại bị ngắt” mở cuộc trò chuyện Muse đã tạo trước khi dịch vụ khởi động lại và tải video, không gửi prompt mới. “Tải toàn bộ video chưa tải” lưu mọi video đã hoàn tất nhưng chưa có file trên máy. “Xóa đã xong” chỉ xóa dòng đã tạo thành công và tải/lưu xong. “Xóa toàn bộ” xóa danh sách và reset STT. Các tệp trên máy chủ và máy bạn được giữ lại. “Lấy lại video” mở đúng cuộc trò chuyện để tải video Muse đã tạo, không gửi prompt mới. “Tạo lại” đưa prompt vào hàng chờ để gửi mới. “Sửa prompt” đổi nội dung dòng đó rồi đưa vào hàng chờ.</div>
+      <div class="tblwrap"><table class="batch-table">
+        <thead><tr><th>STT</th><th>Media</th><th>Prompt</th><th>Chế độ</th><th>Thời gian</th><th>Trạng thái / Lỗi</th><th>Thao tác</th></tr></thead>
+        <tbody id="batchResults" aria-live="polite"></tbody>
+      </table></div>
+    </div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-image-video">
+    <div class="card">
+      <h3>Image to Video · Tạo ảnh trước, dùng ảnh đó tạo video</h3>
+      <div class="hint">Mỗi dòng prompt video khớp với ảnh cùng STT. Chọn tạo ảnh bằng prompt hoặc tải ảnh lên theo tên 001.jpg, 002.png…; sau khi kiểm tra ảnh, bấm Tạo video. Thời lượng video là 8 giây.</div>
+      <div style="margin-top:12px"><label for="ivImageMode">Nguồn ảnh đầu vào</label><select id="ivImageMode" onchange="changeImageVideoMode()"><option value="generate">Tạo ảnh từ prompt</option><option value="upload">Tải ảnh lên theo STT</option></select></div>
+      <div class="row" style="margin-top:14px;align-items:start">
+        <div id="ivImagePromptField" style="flex:1;min-width:300px"><label>Danh sách prompt tạo ảnh · mỗi dòng một prompt</label>
+          <textarea id="ivImagePrompts" rows="9" oninput="persistImageVideoFlow()" placeholder="Một dòng prompt ảnh cho mỗi cảnh"></textarea>
+          <div style="margin-top:8px"><label for="ivImageReferenceInput">Ảnh tham chiếu dùng chung khi tạo ảnh (không bắt buộc)</label><input id="ivImageReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseImageVideoImageReference(this)"><div id="ivImageReferencePreview" class="hint"></div><button type="button" class="ghost mini" id="ivImageReferenceClear" onclick="clearImageVideoImageReference()" style="display:none">Bỏ ảnh tham chiếu</button><div class="hint">PNG, JPG hoặc WebP, tối đa 10 MB. Ảnh này được dùng làm tham chiếu cho mọi prompt tạo ảnh trong luồng.</div></div></div>
+        <div style="flex:1;min-width:300px"><label>Danh sách prompt tạo video · cùng thứ tự với prompt ảnh</label>
+          <textarea id="ivVideoPrompts" rows="9" oninput="persistImageVideoFlow()" placeholder="Một dòng prompt video cho mỗi ảnh"></textarea>
+          <div id="ivUploadField" style="display:none;margin-top:10px"><label for="ivImageFiles">Chọn danh sách ảnh</label><input id="ivImageFiles" type="file" multiple accept="image/png,image/jpeg,image/webp" onchange="startImageVideoImages()"><div class="hint">Chọn ảnh theo đúng thứ tự cảnh. Ảnh sẽ tự đánh STT 001, 002… và thay danh sách ảnh đã nạp trước đó. Số ảnh phải bằng số dòng prompt video. PNG/JPG/WebP tối đa 10 MB mỗi ảnh.</div></div>
+        </div>
+      </div>
+      <div class="acts" style="margin-top:8px"><button type="button" class="ghost" id="ivLoadVideoPrompts" onclick="loadImageVideoPrompts()">Nạp prompt video</button><button type="button" class="ghost" id="ivUpdatePrompts" onclick="updateImageVideoPromptList()">Cập nhật danh sách theo prompt</button><span class="hint">Nạp prompt video sẽ cập nhật theo thứ tự; dòng thiếu prompt sẽ để trống.</span></div>
+      <div class="row" style="align-items:end;margin-top:10px">
+        <div><label for="ivSize">Tỷ lệ</label><select id="ivSize" onchange="persistImageVideoFlow()"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></div>
+        <div><label for="ivWorkers">Số worker đồng thời</label><select id="ivWorkers" onchange="imageVideoWorkersChanged()"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
+        <button type="button" class="primary" id="ivCreateImages" onclick="startImageVideoImages()">Tạo ảnh</button>
+        <button type="button" class="primary" id="ivCreateVideos" onclick="startImageVideoVideos()" disabled>Tạo video</button>
+        <button type="button" class="ghost" id="ivPause" onclick="pauseImageVideoJobs()" style="display:none">Tạm dừng</button>
+        <button type="button" class="ghost" id="ivReset" onclick="resetImageVideoFlow()">Xóa danh sách</button>
+      </div>
+      <div id="ivSummary" class="hint" style="margin-top:12px" aria-live="polite">Nhập hai danh sách prompt có cùng số dòng.</div>
+    </div>
+    <div class="card">
+      <div class="tblwrap"><table class="batch-table">
+        <thead><tr><th>STT</th><th>Ảnh tạo được</th><th>Prompt tạo ảnh</th><th>Prompt tạo video</th><th>Video kết quả</th><th>Trạng thái / thao tác</th></tr></thead>
+        <tbody id="ivResults"><tr><td colspan="6" class="empty">Chưa có prompt.</td></tr></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-assembly">
+    <div class="card">
+      <h3>Ghép video theo timeline</h3>
+      <div class="hint">Chọn folder dự án có timeline.csv cùng hai thư mục audio/ và video/. Mỗi audio là một phân cảnh lớn; các video được tìm theo số thứ tự scene_start–scene_end và chia đều thời lượng audio. File MP4 hoàn chỉnh sẽ được lưu vào thư mục output bên trong folder dự án.</div>
+      <div style="margin-top:14px;max-width:420px">
+        <label for="assemblyMode">Kiểu ghép</label>
+        <select id="assemblyMode">
+          <option value="segments">Luồng cũ — một audio cho nhiều cảnh</option>
+          <option value="prompt_timeline">Luồng mới — nhiều batch audio theo timeline từng prompt</option>
+        </select>
+        <div class="hint">Luồng mới dùng audio_start_sec, audio_end_sec và display_duration_sec để căn đoạn audio và thời lượng cảnh; audio_file (nếu có) chọn batch audio, video_file chọn clip video.</div>
+      </div>
+      <div class="row" style="align-items:end;margin-top:16px">
+        <div style="flex:1;min-width:260px">
+          <label>Folder tham chiếu</label>
+          <button type="button" id="assemblyChooseFolder" class="ghost" onclick="chooseAssemblyFolder()">Chọn folder dự án</button>
+          <input id="assemblyFolder" type="file" webkitdirectory directory multiple hidden onchange="assemblyFallbackSelected()">
+          <div id="assemblyFolderName" class="hint">Chưa chọn folder.</div>
+        </div>
+        <button id="assemblyStart" onclick="startVideoAssembly()">Ghép video và lưu vào output</button>
+        <button type="button" id="assemblyRenameVideos" class="ghost" onclick="renumberAssemblyVideos()" disabled>Đánh số video 001…n</button>
+      </div>
+      <div id="assemblyStatus" class="hint" aria-live="polite" style="margin-top:12px">Chưa chọn folder.</div>
+      <progress id="assemblyProgress" max="100" value="0" style="width:100%;display:none;margin-top:8px"></progress>
+    </div>
+  </section>
+
   <!-- ==================== Nhóm tài khoản ==================== -->
-  <section class="tab active" id="tab-pool">
+  <section class="tab" id="tab-pool">
     <div class="warnbar" id="expWarn" style="display:none">
       <span id="expWarnText"></span>
       <button class="ghost mini" onclick="goTab('cookie')">Đăng nhập lại</button>
@@ -342,7 +446,7 @@
       <h3>Thêm tài khoản <span class="tag">Hỗ trợ nhập hàng loạt</span></h3>
       <div class="hint">
         Sao chép chuỗi Cookie của <b>muse.ai</b> từ trình duyệt rồi dán vào đây. Các cookie quan trọng:
-        <code>hatch_sess</code>, <code>hatch_gw</code>, <code>hatch_vml</code>.
+        <code>hatch_sess</code>, <code>hatch_vml</code> và <code>hatch_native_auth_device</code>.
         Nhập hàng loạt: mỗi dòng một tài khoản, định dạng <code>nhãn | chuỗi cookie</code>(có thể bỏ nhãn).
       </div>
       <div class="row">
@@ -352,7 +456,7 @@
         </div>
         <div style="flex:3">
           <label>Chuỗi Cookie</label>
-          <textarea id="newCookie" rows="4" placeholder="hatch_sess=...; hatch_gw=...; hatch_vml=...&#10;hoặc nhập hàng loạt: &#10;acc-01 | hatch_sess=...; hatch_gw=...&#10;acc-02 | hatch_sess=...; hatch_gw=..."></textarea>
+          <textarea id="newCookie" rows="4" placeholder="hatch_sess=...; hatch_vml=...; hatch_native_auth_device=...&#10;hoặc nhập hàng loạt cookie tương tự"></textarea>
         </div>
       </div>
       <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
@@ -380,6 +484,7 @@
         <tbody id="poolBody"><tr><td colspan="10" class="empty">Đang tải…</td></tr></tbody>
       </table></div>
     </div>
+
   </section>
 
   <!-- ==================== Lấy Cookie ==================== -->
@@ -389,7 +494,7 @@
       <div class="hint">
         Dùng tiện ích trình duyệt để đồng bộ <b>phiên muse.ai đã đăng nhập trên máy của bạn</b> sang dịch vụ.
         Không cần cài Python, mở terminal hay gõ lệnh.<br>
-        <b>Vì sao cần tiện ích?</b> Bốn cookie cốt lõi của muse.ai đều được đánh dấu
+        <b>Vì sao cần tiện ích?</b> Cookie phiên cốt lõi của muse.ai được đánh dấu
         <code>httpOnly</code> ; mã chạy trên trang web (gõ <code>document.cookie</code> trong F12,
         hoặc bookmarklet) không đọc được; chỉ API <code>cookies</code> của tiện ích trình duyệt mới đọc được.
       </div>
@@ -485,7 +590,7 @@
         </div>
         <div style="flex:3">
           <label>Chuỗi Cookie</label>
-          <textarea id="mCookie" rows="3" placeholder="hatch_sess=...; hatch_gw=...; hatch_vml=...; hatch_native_auth_device=..."></textarea>
+          <textarea id="mCookie" rows="3" placeholder="hatch_sess=...; hatch_vml=...; hatch_native_auth_device=..."></textarea>
         </div>
       </div>
       <div style="margin-top:12px">
@@ -523,7 +628,6 @@
         <thead><tr><th>cookie</th><th>httpOnly</th><th>Thời hạn đo được</th><th>Vai trò</th></tr></thead>
         <tbody>
           <tr><td class="mono">hatch_sess</td><td>Có</td><td><b style="color:var(--ok)">Khoảng 30 ngày</b></td><td>Phiên chính, quyết định khả năng đăng nhập</td></tr>
-          <tr><td class="mono">hatch_gw</td><td>Có</td><td><b style="color:var(--ok)">Khoảng 1 năm</b></td><td>Token cổng kết nối</td></tr>
           <tr><td class="mono">hatch_vml</td><td>Có</td><td><b style="color:var(--bad)">Khoảng 2 ngày</b></td><td>Token xác thực ngắn hạn,<b>quyết định thời hạn tài khoản</b></td></tr>
           <tr><td class="mono">hatch_native_auth_device</td><td>Có</td><td><b style="color:var(--ok)">Khoảng 30 ngày</b></td><td>Mã thiết bị (khách ẩn danh cũng có; không phải thông tin đăng nhập)</td></tr>
         </tbody>
@@ -610,79 +714,6 @@
       </div>
       <div style="margin-top:12px"><button class="primary-lg" id="vidBtn" onclick="runVideo()">Bắt đầu tạo video</button></div>
       <div class="result" id="vidRes"></div>
-    </div>
-  </section>
-
-  <!-- ==================== Chạy hàng loạt ==================== -->
-  <section class="tab" id="tab-batch">
-    <div class="card">
-      <h3>Chạy hàng loạt · Mỗi dòng một prompt</h3>
-      <div class="hint">Dán danh sách prompt, chọn tạo ảnh hoặc video rồi bắt đầu. Dòng trống được bỏ qua; mỗi dòng còn lại tạo một tác vụ riêng. Giữ trang mở để tiếp tục gửi các dòng đang chờ.</div>
-      <div class="row">
-        <div><label>Loại nội dung</label><select id="batchKind" onchange="updateBatchOptions(); saveBatchSettings()"><option value="image">Ảnh</option><option value="video">Video</option></select></div>
-        <div><label>Tỷ lệ</label><select id="batchSize"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></div>
-        <div id="batchDurationField" style="display:none"><label>Thời lượng video (giây)</label><select id="batchDuration"><option>5</option><option>6</option><option>8</option><option value="10" selected>10</option></select></div>
-        <div><label>Số tác vụ đồng thời</label><select id="batchConcurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
-      </div>
-      <label style="margin-top:14px">Danh sách prompt</label>
-      <div id="batchReferenceField" style="display:none;margin:12px 0">
-        <label>Ảnh tham chiếu dùng chung cho toàn bộ prompt video</label>
-        <input id="batchReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseBatchReference(this)">
-        <div id="batchReferencePreview"></div>
-        <button id="batchReferenceClear" class="ghost mini" onclick="clearBatchReference()">Bỏ ảnh tham chiếu</button>
-        <div class="hint">PNG, JPG hoặc WebP, tối đa 10 MB. Ảnh được giữ cùng đợt chạy để dùng lại khi xử lý video lỗi.</div>
-      </div>
-      <textarea id="batchPrompts" rows="8" oninput="saveBatchPromptDraft(); updateBatchStartLabel()" placeholder="Một chú mèo cam đi trên bãi cỏ dưới nắng
-Một ngôi nhà gỗ giữa rừng thông
-Một thành phố tương lai dưới ánh đèn neon"></textarea>
-      <div class="hint" id="batchConcurrencyHint">Toàn hệ thống tối đa 10 tác vụ đồng thời; mỗi tài khoản tối đa 5. Một tài khoản chạy tối đa 5; hai tài khoản có thể chạy tổng 10.</div>
-      <label><input type="checkbox" id="batchAutoRetry" checked onchange="saveBatchSettings()"> Tự xử lý lại video lỗi khi hàng chờ còn chỗ và đưa toàn bộ ảnh/video lỗi vào hàng chờ mỗi 20 phút</label>
-      <div class="hint">Ưu tiên prompt đang chờ, lấy video đã có trước khi tạo lại. Mỗi video lỗi được tự thử lại một lần trong mỗi đợt chạy.</div>
-      <div style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:9px">
-        <label>Nơi lưu kết quả trên máy bạn</label>
-        <div class="acts">
-          <button class="ghost" id="batchChooseFolder" onclick="chooseBatchFolder()" title="Chọn thư mục để tự động lưu kết quả">Chọn thư mục tải xuống</button>
-          <button class="ghost" id="batchClearFolder" onclick="clearBatchFolder()" disabled>Dùng thư mục tải xuống của trình duyệt</button>
-        </div>
-        <div id="batchFolderLabel" class="hint" style="margin:8px 0 0" aria-live="polite">Chưa chọn thư mục. Bấm “Tải xuống” ở từng kết quả để lưu theo cài đặt trình duyệt.</div>
-        <div class="hint" style="margin:6px 0 0">Khi đã chọn thư mục, mỗi kết quả được tự động lưu vào đó và thư mục vẫn được giữ sau khi tải lại trang. Bấm ảnh đã lưu để xem lớn. Chọn thư mục trực tiếp cần Chrome/Edge trên HTTPS hoặc localhost. Với địa chỉ HTTP trên máy chủ khác, hãy bật “Hỏi nơi lưu từng tệp” trong cài đặt tải xuống của trình duyệt.</div>
-      </div>
-      <div class="acts" style="margin-top:12px">
-        <button id="batchStart" class="primary-lg" onclick="runBatch()">Chạy 0 prompt</button>
-        <button id="batchStop" class="danger" onclick="stopBatch()" disabled>Dừng gửi thêm</button>
-        <button id="batchReset" class="ghost" onclick="resetBatchNumbering()" disabled>Xóa danh sách và reset STT</button>
-      </div>
-      <div class="hint">STT cộng dồn qua các đợt và được ghi nhớ khi tải lại trang. Sau F5, UI tự lấy trạng thái tác vụ đã gửi và cập nhật mỗi 4 giây; không gửi lại yêu cầu tạo video. Chỉ xóa danh sách/reset khi mọi tác vụ đã kết thúc và kết quả thành công đã tải xong. Thao tác này giữ nguyên tệp đã lưu và lịch sử trên máy chủ. Nếu tên file đã tồn tại sau khi reset, file mới được thêm hậu tố để tránh ghi đè.</div>
-      <div id="batchSummary" class="hint" style="margin-top:14px" aria-live="polite">Chưa có đợt chạy.</div>
-      <div class="hint">“Dừng gửi thêm” bỏ qua các dòng chưa gửi; tác vụ đã gửi vẫn tiếp tục và được theo dõi. Kết quả đã gửi cũng có trong “Lịch sử tác vụ” và “Thư viện media”.</div>
-    </div>
-    <div class="card">
-      <div class="batch-toolbar">
-        <div class="batch-filters">
-          <button class="ghost mini active" id="batchFilterAll" onclick="setBatchFilter('all')">Tất cả (0)</button>
-          <button class="ghost mini" id="batchFilterSending" onclick="setBatchFilter('sending')">Đang gửi (0)</button>
-          <button class="ghost mini" id="batchFilterUnsent" onclick="setBatchFilter('unsent')">Chưa gửi (0)</button>
-          <button class="ghost mini" id="batchFilterCompleted" onclick="setBatchFilter('completed')">Hoàn thành (0)</button>
-          <button class="ghost mini" id="batchFilterFailed" onclick="setBatchFilter('failed')">Lỗi (0)</button>
-          <button class="ghost mini" id="batchFilterRecovery" onclick="setBatchFilter('recovery')">Chờ lấy lại (0)</button>
-        </div>
-        <input type="text" id="batchSearch" placeholder="Tìm STT hoặc prompt…" oninput="applyBatchFilter()" style="width:190px">
-        <button class="ghost mini" id="batchRunUnsent" onclick="rerunBatchJobs('unsent')" disabled>Chạy lại prompt chưa gửi</button>
-        <button class="ghost mini" id="batchRetryAll" onclick="rerunBatchJobs('all')" disabled>Tạo lại tất cả</button>
-        <button class="ghost mini" id="batchRetryFailed" onclick="rerunBatchJobs('failed')" disabled>Tạo lại prompt lỗi</button>
-        <button class="ghost mini" id="batchCollectRendered" onclick="collectRenderedFailures()" disabled>Lấy file đã render</button>
-        <button class="ghost mini" id="batchRecoverVideos" onclick="recoverFailedVideos()" disabled>Lấy lại toàn bộ video lỗi</button>
-        <button class="ghost mini" id="batchReconnect" onclick="reconnectInterrupted()" disabled>Nối lại bị ngắt</button>
-        <button class="ghost mini" id="batchDownloadPending" onclick="downloadPendingVideos()" disabled>Tải toàn bộ video chưa tải</button>
-        <button class="ghost mini" id="batchDownloadAll" onclick="downloadAllVideos()" disabled>Tải toàn bộ</button>
-        <button class="ghost mini" id="batchDeleteDone" onclick="deleteFinishedBatchJobs()" disabled>Xóa đã xong</button>
-        <button class="danger mini" id="batchDeleteAll" onclick="deleteAllBatchJobs()" disabled>Xóa toàn bộ</button>
-      </div>
-      <div class="hint">Các tab “Đang gửi” và “Chưa gửi” tách riêng tác vụ đang chạy với prompt còn chờ. “Chạy prompt chưa gửi” chỉ gửi dòng chắc chắn chưa có mã tác vụ; dòng chưa xác nhận được giữ lại để tránh tạo trùng. “Nối lại bị ngắt” mở cuộc trò chuyện Muse đã tạo trước khi dịch vụ khởi động lại và tải video, không gửi prompt mới. “Tải toàn bộ video chưa tải” lưu mọi video đã hoàn tất nhưng chưa có file trên máy. “Xóa đã xong” chỉ xóa dòng đã tạo thành công và tải/lưu xong. “Xóa toàn bộ” xóa danh sách và reset STT. Các tệp trên máy chủ và máy bạn được giữ lại. Prompt báo lỗi được mở lại đúng cuộc trò chuyện để tải video Muse đã tạo, không gửi prompt mới. “Tạo lại” chỉ gửi prompt mới khi cuộc trò chuyện chưa có file. “Sửa prompt” đổi nội dung dòng đó rồi gửi lại.</div>
-      <div class="tblwrap"><table class="batch-table">
-        <thead><tr><th>STT</th><th>Media</th><th>Prompt</th><th>Chế độ</th><th>Thời gian</th><th>Trạng thái / Lỗi</th><th>Thao tác</th></tr></thead>
-        <tbody id="batchResults" aria-live="polite"></tbody>
-      </table></div>
     </div>
   </section>
 
@@ -840,8 +871,7 @@ t = requests.post(<span class="s">"BASE/v1/videos"</span>, json={<span class="s"
   </section>
 </main>
 
-<footer style="max-width:1280px;margin:18px auto 32px;padding:12px 24px;text-align:center;color:var(--muted);font-size:12px;border-top:1px solid var(--line)">
-  <span>Kho mã nguồn: <a href="https://github.com/czg86389-hub/muse2api" target="_blank" style="color:var(--acc);text-decoration:none">GitHub · muse2api</a></span>
+<footer style="width:100%;max-width:none;margin:18px 0 32px;padding:12px clamp(12px,1.6vw,28px);text-align:center;color:var(--muted);font-size:12px;border-top:1px solid var(--line)">
   <span style="margin:0 10px">·</span>
   <span>Cộng đồng và liên kết: <a href="https://linux.do/" target="_blank" style="color:var(--acc);text-decoration:none;font-weight:600">Cộng đồng LINUX DO (https://linux.do/)</a></span>
 </footer>
@@ -935,6 +965,236 @@ async function api(path, opts){
   return data;
 }
 
+let assemblyProjectHandle = null;
+
+function updateAssemblyRenameButton(){
+  const button=$('assemblyRenameVideos');
+  if(button) button.disabled=!(assemblyProjectHandle && window.showDirectoryPicker);
+}
+
+async function chooseAssemblyFolder(){
+  if (!window.showDirectoryPicker) return $('assemblyFolder').click();
+  try {
+    assemblyProjectHandle = await window.showDirectoryPicker({mode:'readwrite'});
+    $('assemblyFolderName').textContent = `Đã chọn: ${assemblyProjectHandle.name} (video sẽ lưu vào ${assemblyProjectHandle.name}/output)`;
+    updateAssemblyRenameButton();
+  } catch (error) {
+    if (error.name !== 'AbortError') toast('Không mở được folder: ' + error.message, 'error');
+  }
+}
+
+function assemblyFallbackSelected(){
+  assemblyProjectHandle = null;
+  updateAssemblyRenameButton();
+  const files = Array.from($('assemblyFolder').files || []).filter(file =>
+    isAssemblyRelevantPath(file.webkitRelativePath || file.name));
+  const rootName = files[0] && files[0].webkitRelativePath.split('/')[0];
+  $('assemblyFolderName').textContent = files.length
+    ? `Đã chọn: ${rootName || 'folder dự án'} (${files.length} file). Trình duyệt sẽ tải kết quả vào thư mục Downloads.`
+    : 'Chưa chọn folder.';
+}
+
+async function renumberAssemblyVideos(){
+  if(!assemblyProjectHandle)return;
+  const button=$('assemblyRenameVideos');
+  const videoDir=await findAssemblyVideoDirectory(assemblyProjectHandle);
+  if(!videoDir)return toast('Không tìm thấy thư mục video/.','warn');
+  const items=[];
+  for await(const entry of videoDir.values()){
+    if(entry.kind==='file' && /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(entry.name)) items.push(entry);
+  }
+  items.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'}));
+  if(!items.length)return toast('Thư mục video/ không có file video để đổi tên.','warn');
+  if(items.some(entry=>typeof entry.move!=='function'))return toast('Trình duyệt hiện tại chưa hỗ trợ đổi tên file trong folder. Hãy dùng Chrome hoặc Edge mới.','error');
+  if(!confirm(`Đổi tên ${items.length} video trong video/ thành 001, 002, … ${String(items.length).padStart(3,'0')}?`))return;
+  button.disabled=true;
+  const status=$('assemblyStatus');
+  try{
+    // Move every source to a unique temporary name first to avoid collisions with existing 001… files.
+    const staged=[];
+    for(let i=0;i<items.length;i++){
+      const entry=items[i], ext=(entry.name.match(/\.[^.]+$/)||[''])[0];
+      const tempName=`.renumber-${crypto.randomUUID?crypto.randomUUID():Date.now()+'-'+i}${ext}`;
+      await entry.move(tempName);
+      staged.push({entry,tempName,ext,index:i+1});
+    }
+    for(const item of staged) await item.entry.move(`${String(item.index).padStart(3,'0')}${item.ext.toLowerCase()}`);
+    status.textContent=`Đã đánh số ${items.length} video trong thư mục video/ theo thứ tự tên hiện tại.`;
+    toast(`Đã đổi tên ${items.length} video.`, 'ok');
+  }catch(error){
+    status.textContent='Đổi tên video chưa hoàn tất: '+error.message;
+    toast('Đổi tên video thất bại: '+error.message,'error');
+  }finally{updateAssemblyRenameButton();}
+}
+
+async function findAssemblyVideoDirectory(root){
+  for await(const entry of root.values()){
+    if(entry.kind==='directory' && entry.name.toLowerCase()==='video')return entry;
+    if(entry.kind==='directory' && entry.name.toLowerCase()!=='output'){
+      const found=await findAssemblyVideoDirectory(entry);
+      if(found)return found;
+    }
+  }
+  return null;
+}
+
+async function collectAssemblyFiles(directory, prefix='', result=[]){
+  const insideMedia = /(?:^|\/)(?:audio|video)\/$/i.test(prefix);
+  for await (const entry of directory.values()) {
+    if (entry.kind === 'directory') {
+      if (entry.name.toLowerCase() === 'output') continue;
+      const nextPrefix=prefix + entry.name + '/';
+      await collectAssemblyFiles(entry, nextPrefix, result);
+    } else {
+      const inMedia=insideMedia || /(?:^|\/)(?:audio|video)\//i.test(prefix);
+      if(inMedia || ['timeline.csv','prompt.csv'].includes(entry.name.toLowerCase()))
+        result.push({file:await entry.getFile(), relativePath:prefix + entry.name});
+    }
+  }
+  return result;
+}
+
+function isAssemblyRelevantPath(path){
+  const parts=String(path||'').replace(/\\/g,'/').split('/');
+  return parts.some(part=>['audio','video'].includes(part.toLowerCase())) ||
+    ['timeline.csv','prompt.csv'].includes((parts.at(-1)||'').toLowerCase());
+}
+
+if (!window.showDirectoryPicker) {
+  $('assemblyChooseFolder').hidden = true;
+  $('assemblyFolder').hidden = false;
+}
+
+async function startVideoAssembly(){
+  const button = $('assemblyStart'), choose = $('assemblyChooseFolder');
+  const status = $('assemblyStatus'), progress = $('assemblyProgress');
+  let entries = [];
+  if (assemblyProjectHandle) entries = await collectAssemblyFiles(assemblyProjectHandle);
+  else entries = Array.from($('assemblyFolder').files || [])
+    .map(file => ({file, relativePath:file.webkitRelativePath || file.name}))
+    .filter(entry=>isAssemblyRelevantPath(entry.relativePath));
+  if (!entries.length) return toast('Hãy chọn folder dự án trước.', 'warn');
+  if (entries.length > 1000) return toast('Folder có hơn 1000 file; hãy chọn folder gọn hơn.', 'warn');
+  const projectHandle = assemblyProjectHandle;
+  const assemblyJobId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  try { localStorage.setItem('muse2api_assembly_job_v1', assemblyJobId); } catch (_) {}
+  button.disabled = true; choose.disabled = true; progress.style.display = 'block'; progress.value = 5;
+  status.textContent = `Đang tải ${entries.length} file lên máy chủ…`;
+  let pollActive = false;
+  try {
+    const body = new FormData();
+    body.append('job_id', assemblyJobId);
+    body.append('mode', $('assemblyMode')?.value || 'segments');
+    for (const entry of entries) {
+      const safePath = entry.relativePath.replace(/\\/g, '/').split('/')
+        .filter(part => part && part !== '.' && part !== '..').join('/');
+      body.append('files', entry.file, safePath);
+    }
+    const headers = {}; if (KEY) headers.Authorization = 'Bearer ' + KEY;
+    pollActive = true;
+    const progressPoll = (async()=>{
+      while(pollActive){
+        try{
+          const job=await api('/admin/video-assembly/jobs/'+encodeURIComponent(assemblyJobId));
+          if(job.status==='processing'){
+            progress.value=Math.max(progress.value,Number(job.progress)||1);
+            const stages={upload:'Đang tải file lên',probe:'Đang kiểm tra video nguồn',encode:'Đang mã hóa các cảnh', 'audio/concat':'Đang ghép audio và phân cảnh',finalize:'Đang hoàn tất video'};
+            status.textContent=`${stages[job.stage]||'Đang xử lý'} · ${Math.round(Number(job.progress)||1)}%${job.total?` (${job.completed||0}/${job.total} cảnh)`:''}`;
+          }
+        }catch(_){}
+        await new Promise(resolve=>setTimeout(resolve,1200));
+      }
+    })();
+    const response = await fetch('/admin/video-assembly', {method:'POST', headers, body});
+    if (!response.ok) {
+      let message = await response.text();
+      try { const parsed = JSON.parse(message); message = parsed.detail || message; } catch (_) {}
+      throw new Error(message || `HTTP ${response.status}`);
+    }
+    progress.value = Math.max(progress.value, 98);
+    const result = await response.json();
+    if (!result.download_url) throw new Error('Máy chủ không trả liên kết tải video.');
+    if (projectHandle && projectHandle.getDirectoryHandle) {
+      status.textContent = 'Đã ghép xong; đang lưu video vào folder output…';
+      const download = await fetch(result.download_url);
+      if (!download.ok || !download.body) throw new Error('Không tải được video từ máy chủ.');
+      const total = Number(download.headers.get('Content-Length')) || Number(result.size) || 0;
+      const output = await projectHandle.getDirectoryHandle('output', {create:true});
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const outputName = `video-hoan-chinh-${stamp}.mp4`;
+      const outputFile = await output.getFileHandle(outputName, {create:true});
+      const writable = await outputFile.createWritable();
+      const reader = download.body.getReader();
+      let received = 0;
+      try {
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          await writable.write(value);
+          received += value.byteLength;
+          if (total) {
+            progress.value = 90 + Math.floor(10 * received / total);
+            status.textContent = `Đang tải video về (${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB).`;
+          }
+        }
+        await writable.close();
+      } catch (error) {
+        await writable.abort().catch(() => {});
+        throw error;
+      }
+      progress.value = 100;
+      status.textContent = `Đã ghép và lưu ${outputName} vào ${projectHandle.name}/output (${(Number(result.size || 0) / 1048576).toFixed(1)} MB).`;
+    } else {
+      const link = document.createElement('a');
+      link.href = result.download_url; link.download = result.filename || 'video-hoan-chinh.mp4';
+      document.body.appendChild(link); link.click(); link.remove();
+      progress.value = 100; status.textContent = `Đã ghép xong (${(Number(result.size || 0) / 1048576).toFixed(1)} MB). File đang được tải vào thư mục Downloads.`;
+    }
+    toast('Ghép video hoàn tất.', 'ok');
+  } catch (error) {
+    status.textContent = 'Ghép video thất bại: ' + error.message;
+    toast('Ghép video thất bại: ' + error.message, 'error');
+  } finally {
+    pollActive = false;
+    button.disabled = false; choose.disabled = false;
+    setTimeout(() => { progress.style.display = 'none'; }, 1200);
+  }
+}
+
+async function resumeVideoAssembly(){
+  let jobId='';
+  try { jobId=localStorage.getItem('muse2api_assembly_job_v1')||''; } catch (_) {}
+  if(!jobId)return;
+  const status=$('assemblyStatus'),progress=$('assemblyProgress');
+  progress.style.display='block'; progress.removeAttribute('value');
+  status.textContent='Đang kiểm tra tác vụ ghép video đã chạy trước khi tải lại trang…';
+  for(let i=0;i<360;i++){
+    try{
+      const job=await api('/admin/video-assembly/jobs/'+encodeURIComponent(jobId));
+      if(job.status==='completed'){
+        progress.value=100;
+        status.innerHTML=`Ghép video đã hoàn tất (${(Number(job.size||0)/1048576).toFixed(1)} MB). <a href="${esc(job.download_url)}" download="${esc(job.filename||'video-hoan-chinh.mp4')}">Tải kết quả</a>`;
+        return;
+      }
+      if(job.status==='not_found'&&i<20){
+        status.textContent=`Đang chờ máy chủ nhận file và đăng ký tác vụ (${Math.floor(i*3/60)}:${String(i*3%60).padStart(2,'0')}).`;
+      }else if(job.status==='failed'||job.status==='not_found'){
+        progress.style.display='none';
+        if(job.status==='not_found')try{localStorage.removeItem('muse2api_assembly_job_v1')}catch(_){}
+        status.textContent=job.status==='failed'?'Ghép video thất bại: '+(job.error||'Lỗi không xác định.'):'Không khôi phục được tác vụ cũ (có thể máy chủ đã khởi động lại). Hãy bấm “Ghép video và lưu vào output” để chạy lại.';
+        return;
+      }
+      if(job.status==='processing'){
+        const stages={upload:'Đang tải file lên',probe:'Đang kiểm tra video nguồn',encode:'Đang mã hóa các cảnh', 'audio/concat':'Đang ghép audio và phân cảnh',finalize:'Đang hoàn tất video'};
+        progress.value=Number(job.progress)||1;
+        status.textContent=`${stages[job.stage]||'Tác vụ ghép video đang chạy'} · ${Math.round(Number(job.progress)||1)}%${job.total?` (${job.completed||0}/${job.total} cảnh)`:''}`;
+      }
+    }catch(error){status.textContent='Đang nối lại tác vụ ghép video: '+error.message;}
+    await new Promise(resolve=>setTimeout(resolve,3000));
+  }
+  status.textContent='Máy chủ vẫn chưa trả trạng thái. Hãy giữ trang này mở và thử tải lại sau.';
+}
+
 function esc(s){
   return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -977,6 +1237,10 @@ function uiText(value){
   "删除失败": "Xóa thất bại",
   "下载 GitHub 更新包失败": "Tải bản cập nhật GitHub thất bại"
 };
+  if (text.startsWith('Selected account is missing essential cookies:'))
+    text = 'Tài khoản được chọn thiếu cookie cốt lõi: ' + text.split(':').slice(1).join(':').trim();
+  if (text === 'Enabled accounts are missing essential cookies; re-import complete cookies')
+    text = 'Các tài khoản đang bật thiếu cookie cốt lõi; hãy nhập lại đầy đủ cookie.';
   for (const [source, translation] of Object.entries(messages)) text = text.split(source).join(translation);
   return text;
 }
@@ -1015,12 +1279,16 @@ function goTab(name){
   const b = document.querySelector(`nav.tabs button[data-t="${name}"]`);
   if (b) b.click();
 }
+function batchTabIsActive(){ return $('tab-batch').classList.contains('active'); }
 document.querySelectorAll('nav.tabs button').forEach(b => {
   b.onclick = () => {
     document.querySelectorAll('nav.tabs button').forEach(x => x.classList.remove('active'));
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     $('tab-' + b.dataset.t).classList.add('active');
+    try { localStorage.setItem('muse2api_active_tab_v1', b.dataset.t); } catch (_) {}
+    if (b.dataset.t === 'batch') refreshRecoveredBatchJobs();
+    if (b.dataset.t === 'pool') { loadStatus(); loadPool(); }
     if (b.dataset.t === 'tasks') loadTasks();
     if (b.dataset.t === 'media') loadMedia();
     if (b.dataset.t === 'cookie') $('cmdText').textContent = buildCmd($('inBase').value);
@@ -1184,6 +1452,7 @@ function expiryBadge(a){
 let accounts = [];
 
 async function loadPool(){
+  if (!$('tab-pool').classList.contains('active')) return;
   try{
     const d = await api('/admin/accounts');
     accounts = d.accounts || [];
@@ -1219,7 +1488,7 @@ async function loadPool(){
       $('poolBody').innerHTML = '<tr><td colspan="10" class="empty">Chưa có tài khoản. Vào thẻ “Lấy Cookie” và làm theo ba bước để nhập tài khoản</td></tr>';
       return;
     }
-    $('poolBody').innerHTML = accounts.map(a => {
+    $('poolBody').innerHTML = accounts.map((a, index) => {
       const ok = a.ok;
       const badge = !a.enabled ? '<span class="badge mute">Đã tắt</span>'
                   : ok === true  ? '<span class="badge ok">● Khả dụng</span>'
@@ -1237,6 +1506,8 @@ async function loadPool(){
         <td class="mono" title="${a.last_used ? fmtTime(a.last_used) : ''}">${ago(a.last_used)}</td>
         <td class="mono ellip" title="${esc(uiText(a.note||''))}">${esc(uiText(a.note || '—'))}</td>
         <td><div class="acts">
+          <button class="ghost mini" onclick="moveAcc('${a.id}',-1)" ${index === 0 ? 'disabled' : ''} title="Chuyển lên một vị trí">↑</button>
+          <button class="ghost mini" onclick="moveAcc('${a.id}',1)" ${index === accounts.length - 1 ? 'disabled' : ''} title="Chuyển xuống một vị trí">↓</button>
           <button class="ghost mini" onclick="testAcc('${a.id}')">Kiểm tra</button>
           <button class="ghost mini" onclick="keepaliveOne('${a.id}')" title="Làm mới token phiên và thời hạn trong nền">Duy trì phiên</button>
           <button class="ghost mini" onclick="queryQuota('${a.id}', this)">Hạn mức</button>
@@ -1252,6 +1523,18 @@ async function loadPool(){
       ? '<tr><td colspan="10" class="empty">🔑 Hãy nhập API Key ở góc trên bên phải rồi nhấn “Lưu”</td></tr>'
       : `<tr><td colspan="10" class="empty">Tải thất bại: ${esc(uiText(e.message))}</td></tr>`;
   }
+}
+
+async function moveAcc(id, direction){
+  const from = accounts.findIndex(account => account.id === id);
+  const to = from + Number(direction);
+  if (from < 0 || to < 0 || to >= accounts.length) return;
+  const ids = accounts.map(account => account.id);
+  [ids[from], ids[to]] = [ids[to], ids[from]];
+  try{
+    await api('/admin/accounts/order', {method:'PUT', body:JSON.stringify({ids})});
+    await loadPool();
+  }catch(e){ toast('Không đổi được thứ tự tài khoản: ' + uiText(e.message), 'bad'); }
 }
 
 async function addAccount(fromManual){
@@ -1664,6 +1947,38 @@ async function readBatchReference(batch){
     return batch.referenceImage;
   } finally { opened.db.close(); }
 }
+async function readBatchJobReference(batch, job){
+  if (!job.referenceOverride) return readBatchReference(batch);
+  const opened=await openFolderStore('readonly');
+  if (!opened) throw new Error('Không đọc được ảnh tham chiếu đã lưu.');
+  try {
+    const data=await new Promise((resolve,reject)=>{
+      const request=opened.store.get('reference:'+batch.id+':'+job.index);
+      request.onsuccess=()=>resolve(request.result || null);
+      request.onerror=()=>reject(new Error('Không đọc được ảnh tham chiếu đã lưu.'));
+    });
+    if (!data) throw new Error('Ảnh tham chiếu đã mất. Hãy chọn lại ảnh khi sửa prompt.');
+    return data;
+  } finally { opened.db.close(); }
+}
+async function readImageVideoUpload(key){
+  const opened=await openFolderStore('readonly');
+  if(!opened)throw new Error('IndexedDB không khả dụng để đọc ảnh đã tải lên.');
+  try{return await new Promise((resolve,reject)=>{
+    const request=opened.store.get(key);request.onsuccess=()=>resolve(request.result||null);
+    request.onerror=()=>reject(request.error||new Error('Không đọc được ảnh đã tải lên.'));
+  });}finally{opened.db.close();}
+}
+async function removeImageVideoUploads(flowId){
+  try{
+    const opened=await openFolderStore('readwrite');if(!opened)return;
+    const prefix='iv-upload:'+flowId+':';
+    const request=opened.store.getAllKeys();
+    request.onsuccess=()=>request.result.filter(key=>String(key).startsWith(prefix)).forEach(key=>opened.store.delete(key));
+    await new Promise(resolve=>{opened.tx.oncomplete=resolve;opened.tx.onerror=resolve;opened.tx.onabort=resolve;});
+    opened.db.close();
+  }catch(_){}
+}
 let batchDirectoryRestore = null;
 let batchPreviewRestoredDirectory = null;
 let batchHistory = [];
@@ -1924,6 +2239,27 @@ function restoreBatchSettings(){
     updateBatchOptions();
   } catch (error) { console.warn('Cannot restore batch settings'); }
 }
+function setBatchSetupExpanded(expanded, persist=true){
+  const body = $('batchSetupBody');
+  const button = $('batchSetupToggle');
+  if (!body || !button) return;
+  body.hidden = !expanded;
+  button.textContent = expanded ? 'Thu nhỏ' : 'Mở rộng';
+  button.setAttribute('aria-expanded', String(expanded));
+  if (persist) {
+    try { localStorage.setItem('muse2api_batch_setup_expanded_v1', expanded ? '1' : '0'); }
+    catch (_) { /* Keep the current view if browser storage is unavailable. */ }
+  }
+}
+function toggleBatchSetup(){
+  setBatchSetupExpanded($('batchSetupBody').hidden);
+}
+function restoreBatchSetup(){
+  let expanded = false;
+  try { expanded = localStorage.getItem('muse2api_batch_setup_expanded_v1') === '1'; }
+  catch (_) { /* Default to the compact view. */ }
+  setBatchSetupExpanded(expanded, false);
+}
 function saveBatchPromptDraft(){
   try { localStorage.setItem('muse2api_batch_prompt_draft', $('batchPrompts').value); }
   catch (error) { toast('Không lưu được bản nháp prompt trong trình duyệt.', 'warn'); }
@@ -2077,7 +2413,7 @@ function confirmBatchDownload(index){
 async function checkBatchResult(index){
   const batch = batchHistory.find(item => item.jobs.some(job => job.index === index));
   const job = batch && batch.jobs.find(item => item.index === index);
-  if (!job || !job.id || job.checking) return;
+  if (!batch || !job || !job.id || job.checking || (batch.kind === 'video' && !batchTabIsActive())) return;
   job.checking = true;
   try {
     const endpoint = batch.kind === 'image' ? '/v1/images/tasks/' : '/v1/videos/';
@@ -2120,6 +2456,9 @@ function restoreBatchHistory(){
         batch.jobs = batch.jobs.filter(job => job && Number.isSafeInteger(job.index) && job.index >= 0 && !used.has(job.index) && (used.add(job.index), true)).map(job => {
           if (job.status === 'waiting') job.status = 'stopped';
           else if (!['completed','failed','stopped','queued','processing','running'].includes(job.status)) job.status = 'unconfirmed';
+          // A restored in-flight task lost its page-side watcher. Make it available
+          // to the reconnect action, which checks the existing task without resubmitting.
+          if (job.id && ['queued','processing','running'].includes(job.status)) job.interrupted = true;
           job.recovering = !!job.id && !['completed','failed','stopped'].includes(job.status);
           job.contextPending = !!job.id && !safeMuseThreadUrl(job.museUrl);
           if (job.saveState === 'saving') job.saveState = 'failed';
@@ -2163,7 +2502,7 @@ async function noteUnrelatedClips(){
 }
 
 async function refreshRecoveredBatchJobs(){
-  if (batchRecoveryPolling) return;
+  if (!batchTabIsActive() || batchRecoveryPolling) return;
   const pending = batchEntries().filter(({job})=>(job.recovering || job.contextPending) && job.id && !job.checking);
   if (!pending.length) return;
   batchRecoveryPolling = true;
@@ -2193,7 +2532,7 @@ function updateBatchOptions(){
 }
 
 function batchStatusLabel(status){
-  return ({waiting:'Chưa gửi', submitting:'Đang gửi', queued:'Đã gửi · Chờ xử lý', stopped:'Đã bỏ qua',
+  return ({waiting:'Đang chờ lượt', submitting:'Đang gửi', queued:'Đã gửi · Chờ xử lý', stopped:'Đã bỏ qua',
     unconfirmed:'Chưa xác nhận'})[status] || statusLabel(status);
 }
 
@@ -2206,10 +2545,12 @@ function renderBatchSummary(batch){
   const saved = jobs.filter(job => job.saveState === 'saved').length;
   const saveFailed = jobs.filter(job => job.saveState === 'failed').length;
   const preparing = jobs.filter(job => job.preparing || job.collecting).length;
+  const workerCount = activeBatch && activeBatch.running && activeBatch.activeWorkerCount
+    ? activeBatch.activeWorkerCount() : 0;
   const prefix = batchHistory.some(item => item.running && !item.stop) ? 'Đang chạy'
     : batchHistory.some(item => item.running) ? 'Đang hoàn tất tác vụ đã gửi'
     : preparing ? 'Đang xử lý hàng chờ' : 'Đã kết thúc đợt chạy';
-  $('batchSummary').textContent = `${prefix} · Tổng ${jobs.length} · Thành công ${done} · Lỗi ${failed} · Đang xử lý ${running} · Chưa gửi ${waiting} · Bỏ qua ${skipped} · Chưa xác nhận ${uncertain}` + ` · Đã tải/lưu ${saved} · Lỗi lưu ${saveFailed}`;
+  $('batchSummary').textContent = `${prefix} · Worker đang chạy ${workerCount}/${batchParallelLimit()} · Tổng ${jobs.length} · Thành công ${done} · Lỗi ${failed} · Đang xử lý ${running} · Đang chờ lượt ${waiting} · Bỏ qua ${skipped} · Chưa xác nhận ${uncertain}` + ` · Đã tải/lưu ${saved} · Lỗi lưu ${saveFailed}`;
   persistBatchHistory(); updateBatchStartLabel();
 }
 
@@ -2334,15 +2675,18 @@ function renderBatchJob(batch, job){
   const cls = job.preparing || job.collecting || job.reconnecting ? 'warn' : job.status === 'completed' ? 'ok' : ['failed','unconfirmed'].includes(job.status) ? 'bad' : 'warn';
   const progress = Number.isFinite(job.progress) ? Math.max(0, Math.min(100, job.progress)) : 0;
   const url = safeBatchMediaUrl(job.url);
-  const busy = batchSending() || batchRestarting || job.recoveryQueued || job.preparing || job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || ['submitting','queued','processing','running'].includes(job.status);
-  const status = job.reconnecting ? 'Đang nối lại' : job.collecting ? 'Đang lấy file' : job.recoveryQueued ? 'Chờ lấy lại video' : job.preparing || job.sendQueued ? 'Chờ gửi' : batchStatusLabel(job.status);
+  const busy = job.recoveryQueued || job.preparing || job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || ['submitting','queued','processing','running'].includes(job.status);
+  const status = job.reconnecting ? 'Đang nối lại' : job.collecting ? 'Đang lấy file' : job.recoveryQueued ? 'Chờ lấy lại video' : job.sendQueued ? 'Đã xếp tạo mới · Đang chờ lượt' : job.preparing ? '\u0110ang ch\u1edd l\u01b0\u1ee3t' : batchStatusLabel(job.status);
   const museUrl = safeMuseThreadUrl(job.museUrl);
   const media = batchPreviewHtml(batch, job);
   const promptBody = job.editing
     ? `<textarea id="batch-prompt-edit-${job.index}" rows="4" oninput="rememberBatchPromptDraft(${job.index}, this.value)">${esc(job.draft != null ? job.draft : job.prompt)}</textarea>
+      ${batch.kind === 'video' ? `<label class="hint" style="display:block;margin-top:6px">Ảnh tham chiếu cho lần tạo này (tùy chọn)
+        <input type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseBatchJobReference(${job.index}, this)" style="display:block;margin-top:4px">
+      </label>${job.editReferenceName ? `<div class="hint">Ảnh đã chọn: ${esc(job.editReferenceName)}</div>` : ''}` : ''}
       <div class="acts" style="margin-top:6px">
-        <button class="mini" type="button" onclick="submitBatchPromptEdit(${job.index})" ${busy ? 'disabled' : ''}>Gửi lại</button>
-        <button class="ghost mini" type="button" onclick="cancelBatchPromptEdit(${job.index})" ${busy ? 'disabled' : ''}>Hủy</button>
+        <button class="mini" type="button" onclick="submitBatchPromptEdit(${job.index})">Đưa vào hàng chờ</button>
+        <button class="ghost mini" type="button" onclick="cancelBatchPromptEdit(${job.index})">Hủy</button>
       </div>`
     : `<div class="prompt-text" title="${esc(job.prompt)}">${esc(job.prompt)}</div>
       <details><summary>Xem prompt</summary>${esc(job.prompt)}</details>`;
@@ -2352,7 +2696,7 @@ function renderBatchJob(batch, job){
       ${job.savedName ? `<div class="mono" style="color:var(--ok);margin-top:5px">${job.saveState === 'saved' ? 'Đã lưu' : 'Tên file'}: ${esc(job.savedName)}</div>` : ''}
       ${job.id ? `<div class="mono">${esc(job.id)}</div>` : ''}
       ${job.accountLabel ? `<div class="mono">Tài khoản Muse: ${esc(job.accountLabel)}</div>` : ''}</td>
-    <td><span class="badge info">${batch.kind === 'video' ? (batch.hasReference ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div>${batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : ''}</td>
+    <td><span class="badge info">${batch.kind === 'video' ? ((batch.hasReference || job.referenceOverride) ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div>${job.referenceOverride ? `<div class="hint">Ảnh riêng: ${esc(job.referenceName || 'tham chiếu')}</div>` : (batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : '')}</td>
     <td class="mono">${job.createdAt ? fmtTime(job.createdAt) : '—'}<div>${job.elapsed ? esc(job.elapsed) + 's' : ''}</div>${job.attempt ? `<div>Lần tạo ${Number(job.attempt) + 1}</div>` : ''}</td>
     <td><span class="badge ${cls}">${esc(status)}</span>${['queued','processing'].includes(job.status) ? `<div class="mono">${progress}%</div>` : ''}
       ${job.error ? `<div class="batch-error">${esc(uiText(job.error))}</div>` : ''}
@@ -2366,12 +2710,13 @@ function renderBatchJob(batch, job){
     <td class="batch-actions"><div class="acts">
       ${canReconnect(job) ? `<button class="ghost mini" onclick="reconnectInterrupted(${job.index})" ${job.reconnecting ? 'disabled' : ''}>${job.reconnecting ? 'Đang nối lại…' : 'Nối lại'}</button>` : ''}
       ${batch.kind === 'video' && ['failed','unconfirmed'].includes(job.status) ? `<button class="ghost mini" onclick="recoverFailedVideos(${job.index})" ${busy || !job.id ? 'disabled' : ''} title="Lấy video từ cuộc trò chuyện cũ">${job.collecting ? 'Đang lấy video…' : 'Lấy lại video'}</button>` : canCollectRendered(job) ? `<button class="ghost mini" onclick="collectRenderedJob(${job.index})" ${busy ? 'disabled' : ''}>${job.collecting ? 'Đang lấy file…' : 'Lấy ảnh đã render'}</button>` : ''}
-      ${job.editing ? '' : `<button class="ghost mini" onclick="startBatchPromptEdit(${job.index})" ${busy ? 'disabled' : ''} title="Sửa nội dung prompt rồi gửi lại">Sửa prompt</button>`}
-      <button class="ghost mini" onclick="rerunBatchJobs('one',${job.index})" ${busy ? 'disabled' : ''} title="Tải video đã tạo nếu có. Chưa có file thì gửi lại prompt.">Tạo lại</button>
+      ${job.editing ? '' : `<button class="ghost mini" onclick="startBatchPromptEdit(${job.index})" title="Sửa nội dung prompt rồi đưa vào hàng chờ">Sửa prompt</button>`}
+      ${['submitting','queued','processing','running'].includes(job.status) ? `<button class="ghost mini" onclick="cancelBatchJobToUnsent(${job.index})" title="Hủy tác vụ này; prompt được giữ lại để xếp hàng lại sau">${job.cancelling ? 'Đang hủy…' : 'Hủy, để gửi lại sau'}</button>` : ''}
+      <button class="ghost mini" onclick="retryBatchJob(${job.index})" title="Tạo lại tại STT này; nếu tác vụ cũ đang chạy, hủy tác vụ đó trước.">Tạo lại</button>
       ${url ? `<a class="badge info" href="${esc(url)}" target="_blank" rel="noopener">Mở</a><button class="ghost mini" onclick="retryBatchSave(${job.index})" ${job.saveState === 'saving' || job.saveState === 'saved' ? 'disabled' : ''}>${job.saveState === 'failed' ? 'Lưu lại' : 'Tải xuống'}</button>` : ''}
       ${job.status === 'unconfirmed' && job.id ? `<button class="ghost mini" onclick="checkBatchResult(${job.index})" ${job.checking ? 'disabled' : ''}>Kiểm tra lại</button>` : ''}
       ${job.saveState === 'browserRequested' ? `<button class="ghost mini" onclick="confirmBatchDownload(${job.index})">Xác nhận đã tải xong</button>` : ''}
-      <button class="danger mini" onclick="deleteBatchJob(${job.index})" ${busy ? 'disabled' : ''}>Xóa</button>
+      <button class="danger mini" onclick="deleteBatchJob(${job.index})" ${(job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || job.recoveryQueued) ? 'disabled' : ''}>${job.deleteAfterCancel ? 'Đang hủy…' : 'Xóa'}</button>
     </div></td>`;
   renderBatchSummary(batch);
   updateBatchListControls();
@@ -2379,20 +2724,17 @@ function renderBatchJob(batch, job){
 }
 
 function batchEntries(){ return batchHistory.flatMap(batch => batch.jobs.map(job => ({batch,job}))); }
-function isUnsentBatchJob(job){
-  return !job.id && (['waiting','stopped'].includes(job.status) || job.status === 'failed');
-}
 function matchesBatchFilter(job, filter){
   if (job.status === 'completed' || job.status === 'succeeded') {
     return filter === 'all' || filter === 'completed' || (filter === 'failed' && job.saveState === 'failed');
   }
   if (job.collecting || job.reconnecting) return filter === 'all' || filter === 'sending';
   if (job.recoveryQueued) return filter === 'all' || filter === 'recovery';
-  if (job.sendQueued || job.preparing) return filter === 'all' || filter === 'unsent';
+  if (job.sendQueued || job.preparing) return filter === 'all' || filter === 'waiting';
   if (filter === 'recovery') return !!job.recoveryQueued;
   if (filter !== 'all' && job.recoveryQueued) return false;
   if (filter === 'sending') return ['submitting','queued','processing','running'].includes(job.status);
-  if (filter === 'unsent') return isUnsentBatchJob(job);
+  if (filter === 'waiting') return job.status === 'waiting';
   if (filter === 'completed') return job.status === 'completed';
   if (filter === 'failed') return ['failed','unconfirmed'].includes(job.status) || job.saveState === 'failed';
   return true;
@@ -2406,7 +2748,7 @@ function applyBatchFilter(){
     const visible = matchesBatchFilter(job,batchFilter) && (!query || `${job.index+1} ${job.prompt}`.toLowerCase().includes(query));
     if (row) row.hidden = !visible;
   }
-  for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['sending','batchFilterSending','Đang gửi'],['unsent','batchFilterUnsent','Chưa gửi'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi'],['recovery','batchFilterRecovery','Chờ lấy lại']]) {
+  for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['sending','batchFilterSending','Đang gửi'],['waiting','batchFilterWaiting','Đang chờ lượt'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi'],['recovery','batchFilterRecovery','Chờ lấy lại']]) {
     $(id).textContent = `${label} (${entries.filter(({job})=>matchesBatchFilter(job,filter)).length})`;
     $(id).classList.toggle('active',batchFilter === filter);
   }
@@ -2417,17 +2759,15 @@ function batchSending(){
 }
 function updateBatchListControls(){
   const entries = batchEntries();
-  const locked = batchIsBusy();
-  $('batchRunUnsent').disabled = locked || !entries.some(({job})=>isUnsentBatchJob(job));
-  $('batchRetryAll').disabled = locked || !entries.length;
-  $('batchRetryFailed').disabled = locked || !entries.some(({job})=>['failed','unconfirmed','stopped'].includes(job.status));
-  $('batchCollectRendered').disabled = locked || !entries.some(({job})=>canCollectRendered(job));
+  $('batchRetryAll').disabled = !entries.length;
+  $('batchRetryFailed').disabled = !entries.some(({job})=>['failed','unconfirmed','stopped'].includes(job.status));
+  $('batchCollectRendered').disabled = !entries.some(({job})=>canCollectRendered(job));
   $('batchRecoverVideos').disabled = batchRecoveringVideos || batchRestarting || !entries.some(({batch,job})=>canRecoverFailedVideo(batch,job));
   $('batchReconnect').disabled = !entries.some(({job}) => canReconnect(job));
   $('batchDownloadPending').disabled = batchDownloading || !pendingVideoDownloads().length;
   $('batchDownloadAll').disabled = batchDownloading || entries.some(({job})=>job.saveState === 'saving') || !entries.some(({batch,job})=>batch.kind === 'video' && job.status === 'completed' && safeBatchMediaUrl(job.url));
-  $('batchDeleteDone').disabled = locked || !entries.some(({job})=>job.status==='completed' && job.saveState==='saved');
-  $('batchDeleteAll').disabled = locked || !entries.length;
+  $('batchDeleteDone').disabled = entries.some(({job})=>job.saveState === 'saving') || !entries.some(({job})=>job.status==='completed' && job.saveState==='saved');
+  $('batchDeleteAll').disabled = batchSending() || batchRestarting || batchRecoveringVideos || entries.some(({job})=>job.saveState === 'saving') || !entries.length;
   applyBatchFilter();
 }
 function rebuildBatchTable(){
@@ -2445,12 +2785,57 @@ function deleteFinishedBatchJobs(){
   batchHistory=batchHistory.filter(batch=>batch.jobs.length); rebuildBatchTable();
   toast(`Đã xóa ${removed} dòng đã xong.`);
 }
-function deleteBatchJob(index){
+function removeBatchJobRecord(index){
   const found = batchJobByIndex(index);
-  if (!found || batchSending() || found.job.saveState === 'saving' || ['submitting','queued','processing','running'].includes(found.job.status)) return;
+  if (found) {
+    found.job.deleted = true;
+    found.job.runToken = 'deleted-' + Date.now();
+  }
+  if (activeBatch) {
+    activeBatch.retryQueue = (activeBatch.retryQueue || []).filter(entry => entry.job.index !== index);
+    activeBatch.entries = (activeBatch.entries || []).filter(entry => entry.job.index !== index);
+    activeBatch.jobs = (activeBatch.jobs || []).filter(job => job.index !== index);
+  }
   dropLocalBatchPreview(index);
   batchHistory.forEach(batch=>{batch.jobs=batch.jobs.filter(job=>job.index!==index);});
-  batchHistory=batchHistory.filter(batch=>batch.jobs.length); rebuildBatchTable();
+  batchHistory=batchHistory.filter(batch=>batch.jobs.length);
+  rebuildBatchTable();
+}
+async function deleteBatchJob(index){
+  const found = batchJobByIndex(index);
+  if (!found) return;
+  const {job}=found;
+  if (job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || job.recoveryQueued) return;
+  if (job.status === 'waiting' || job.sendQueued || job.preparing) {
+    removeBatchJobRecord(index);
+    return;
+  }
+  if (['submitting','queued','processing','running'].includes(job.status)) {
+    if (job.deleteAfterCancel || job.cancelling) return;
+    job.deleteAfterCancel = true;
+    job.cancelToUnsent = true;
+    job.runToken = 'delete-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    renderBatchJob(found.batch, job);
+    if (!job.id) {
+      toast('Đang chờ mã tác vụ để xác nhận hủy rồi xóa dòng này.');
+      return;
+    }
+    try {
+      await cancelBatchServerTask(job.id);
+      removeBatchJobRecord(index);
+      toast('Đã hủy tác vụ và xóa dòng.');
+    } catch (error) {
+      job.status = 'unconfirmed';
+      job.error = 'Chưa xác nhận được hủy tác vụ nên chưa xóa dòng. ' + error.message;
+      delete job.cancelling;
+      delete job.cancelToUnsent;
+      delete job.deleteAfterCancel;
+      renderBatchJob(found.batch, job);
+      toast(job.error, 'bad');
+    }
+    return;
+  }
+  removeBatchJobRecord(index);
 }
 function deleteAllBatchJobs(){
   updateBatchListControls(); if ($('batchDeleteAll').disabled) return;
@@ -2464,7 +2849,9 @@ function deleteAllBatchJobs(){
 
 function canCollectRendered(job){
   if (String(job.error || '').includes('MUSE_ACTION_REQUIRED:')) return false;
-  return job.status === 'failed' && !!job.id && !!safeMuseThreadUrl(job.museUrl) && !safeBatchMediaUrl(job.url);
+  // The server can recover the Muse thread URL from the task record. Don't hide
+  // the recovery action just because this browser's saved batch row lacks it.
+  return job.status === 'failed' && !!job.id && !safeBatchMediaUrl(job.url);
 }
 
 function canRecoverFailedVideo(batch, job){
@@ -2691,11 +3078,16 @@ async function collectRenderedFailures(){
   if (!entries.length) return toast('Không có prompt lỗi nào còn cuộc trò chuyện Muse để lấy file.', 'warn');
   toast(`Đang lấy ${entries.length} file đã render…`);
   let saved = 0, missed = 0;
+  const errors = [];
   for (const {job} of entries) {
     if (await collectRenderedJob(job.index, {allowWhileRunning:true})) saved++;
-    else missed++;
+    else {
+      missed++;
+      if (job.lastCollectError) errors.push(`STT ${job.index + 1}: ${uiText(job.lastCollectError)}`);
+    }
   }
-  toast(saved ? `Đã lấy ${saved} file đã render${missed ? `. ${missed} cuộc chưa có file` : ''}.` : 'Không lấy được file đã render.', saved && !missed ? 'ok' : 'warn');
+  const detail = errors.length ? ` ${errors[0]}` : '';
+  toast(saved ? `Đã lấy ${saved} file đã render${missed ? `. ${missed} cuộc chưa có file.${detail}` : ''}.` : `Không lấy được file đã render.${detail}`, saved && !missed ? 'ok' : 'warn');
 }
 
 function rememberBatchAccount(job, result){
@@ -2731,9 +3123,13 @@ function stopBatch(runner){
   const target = runner && Array.isArray(runner.jobs) ? runner : activeBatch;
   if (!target || !target.running || target.abandoned) return;
   target.stop = true;
+  target.paused = false;
+  (target.pauseWaiters || []).splice(0).forEach(resolve=>resolve());
   if (target === activeBatch) {
     batchHistory.filter(item=>item.running).forEach(item=>{item.stop=true;});
     $('batchStop').disabled = true;
+    $('batchPause').disabled = true;
+    $('batchResume').disabled = true;
   }
   for (const job of target.jobs) {
     if (job.status === 'waiting' && job.runToken === target.token) {
@@ -2746,16 +3142,77 @@ function stopBatch(runner){
   if (target === activeBatch) renderBatchSummary(batchHistory[0] || target);
 }
 
+function batchHasResumableJobs(runner){
+  return !!runner && (runner.jobs || []).some(job=>['waiting','stopped','failed'].includes(job.status));
+}
+
+function pauseBatch(){
+  const runner=activeBatch;
+  if(!runner || !runner.running || runner.paused || runner.stop || runner.abandoned) return;
+  runner.paused=true;
+  $('batchPause').disabled=true;
+  $('batchResume').disabled=false;
+  toast('Đã tạm dừng nhận prompt mới. Tác vụ đang xử lý sẽ chạy hết.');
+  renderBatchSummary(runner);
+}
+
+function resetBatchJobForResume(job, token){
+  const prompt=job.prompt, index=job.index, attempt=(job.attempt || 0)+1;
+  Object.keys(job).forEach(key=>delete job[key]);
+  Object.assign(job,{prompt,index,attempt,status:'waiting',progress:0,
+    createdAt:Math.floor(Date.now()/1000),runToken:token});
+}
+
+async function resumeBatch(){
+  const runner=activeBatch;
+  if(runner && runner.running){
+    if(!runner.paused) return toast('Batch vẫn đang chạy. Chỉ có thể chạy tiếp sau khi tạm dừng.','warn');
+    const retry=[];
+    for(const job of runner.jobs){
+      if(job.status!=='failed') continue;
+      const batch=(runner.owners || []).find(item=>item.jobs.includes(job));
+      if(!batch) continue;
+      resetBatchJobForResume(job,runner.token);
+      retry.push({batch,job});
+      renderBatchJob(batch,job);
+    }
+    runner.retryQueue=(runner.retryQueue || []).concat(retry);
+    runner.paused=false;
+    (runner.pauseWaiters || []).splice(0).forEach(resolve=>resolve());
+    $('batchPause').disabled=false;
+    $('batchResume').disabled=true;
+    toast(`Chạy tiếp: đưa ${retry.length} prompt lỗi về hàng chờ; prompt chưa xử lý cũng tiếp tục.`);
+    renderBatchSummary(runner);
+    return;
+  }
+  const source=runner && runner.jobs && runner.jobs.length
+    ? runner.jobs.map(job=>({job,batch:(runner.owners || []).find(item=>item.jobs.includes(job))}))
+    : batchEntries();
+  const entries=source.filter(entry=>entry.batch && ['waiting','stopped','failed'].includes(entry.job.status));
+  if(!entries.length) return toast('Không có prompt lỗi hoặc chưa xử lý để chạy tiếp.','warn');
+  for(const {job} of entries){
+    if(job.status==='failed') resetBatchJobForResume(job,null);
+    else { job.status='waiting'; job.error=''; job.progress=0; }
+  }
+  $('batchPause').disabled=true;
+  $('batchResume').disabled=true;
+  await executeBatchEntries(entries);
+}
+
 async function processBatchJob(batch, job, runner, accountId){
   delete job.sendQueued;
   const endpoint = batch.kind === 'image' ? '/v1/images/tasks' : '/v1/videos';
   const body = {prompt:job.prompt, size:batch.size, timeout:600};
   const token = runner && runner.token;
-  const alive = () => !!runner && job.runToken === token;
-  if (accountId) body.account_id = accountId;
+  const executionToken = `${token}-${job.index}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  job.executionToken = executionToken;
+  const alive = () => !!runner && job.runToken === token && job.executionToken === executionToken;
+  // Let the server account pool assign each queued task. Pinning a worker to
+  // one account can keep that account busy while other enabled accounts sit idle.
   if (batch.kind === 'video') body.duration = batch.duration;
   try {
-    if (batch.kind === 'video' && batch.hasReference) body.reference_image=await readBatchReference(batch);
+    if (batch.kind === 'video' && (batch.hasReference || job.referenceOverride))
+      body.reference_image=await readBatchJobReference(batch,job);
   } catch(error) {
     job.status='failed';job.error='MUSE_ACTION_REQUIRED: '+error.message;
     renderBatchJob(batch,job);
@@ -2770,10 +3227,66 @@ async function processBatchJob(batch, job, runner, accountId){
     try {
       const headers = batch.kind === 'image' ? {'Idempotency-Key':batch.id + '-' + job.index + '-' + (job.attempt || 0)} : {};
       result = await api(endpoint, {method:'POST', headers, body:JSON.stringify(body)});
-      if (!alive()) return;
+      if (!alive()) {
+        const staleTaskId = result.id || result.task_id;
+        if (job.cancelToUnsent) {
+          if (!staleTaskId) {
+            job.status = 'unconfirmed';
+            job.error = 'Không nhận được mã tác vụ để xác nhận hủy. Hãy kiểm tra lịch sử trước khi gửi lại.';
+            delete job.cancelling;
+            delete job.cancelToUnsent;
+            delete job.deleteAfterCancel;
+            delete job.rerunAfterCancel;
+            delete job.promptAfterCancel;
+            renderBatchJob(batch, job);
+            return;
+          }
+          job.id = staleTaskId;
+          try {
+            await cancelBatchServerTask(staleTaskId);
+            if (job.deleteAfterCancel) {
+              removeBatchJobRecord(job.index);
+              toast('Đã hủy tác vụ và xóa dòng.');
+              return;
+            }
+            const shouldRerun = !!job.rerunAfterCancel;
+            const replacementPrompt = job.promptAfterCancel;
+            moveBatchJobToUnsent(batch, job);
+            if (replacementPrompt != null) job.prompt = replacementPrompt;
+            if (shouldRerun) await rerunBatchJobs('one', job.index, {force:true});
+          } catch (error) {
+            job.status = 'unconfirmed';
+            job.error = 'Chưa xác nhận được hủy tác vụ. Hãy kiểm tra tác vụ trước khi gửi lại. ' + error.message;
+            delete job.cancelling;
+            delete job.cancelToUnsent;
+            delete job.deleteAfterCancel;
+            delete job.rerunAfterCancel;
+            delete job.promptAfterCancel;
+            renderBatchJob(batch, job);
+          }
+          return;
+        }
+        if (staleTaskId) {
+          try { await cancelBatchServerTask(staleTaskId); }
+          catch (error) { console.warn('Could not cancel an abandoned task submission:', error.message); }
+        }
+        return;
+      }
       break;
     } catch (error) {
-      if (!alive()) return;
+      if (!alive()) {
+        if (job.cancelToUnsent) {
+          job.status = 'unconfirmed';
+          job.error = 'Không xác nhận được kết quả gửi và hủy. Hãy kiểm tra lịch sử tác vụ trước khi gửi lại. ' + error.message;
+          delete job.cancelling;
+          delete job.cancelToUnsent;
+          delete job.deleteAfterCancel;
+          delete job.rerunAfterCancel;
+          delete job.promptAfterCancel;
+          renderBatchJob(batch, job);
+        }
+        return;
+      }
       if (error.status === 429 && attempt < 12 && !runner.stop) {
         job.error = 'Hàng đợi máy chủ đang đầy; sẽ thử gửi lại sau 5 giây.';
         renderBatchJob(batch, job);
@@ -2830,6 +3343,10 @@ async function processBatchJob(batch, job, runner, accountId){
     renderBatchJob(batch, job);
     await batchSleep(batch.kind === 'image' ? 3000 : 4000);
     if (!alive()) return;
+    if (batch.kind === 'video') {
+      while (alive() && !batchTabIsActive()) await batchSleep(500);
+      if (!alive()) return;
+    }
     try {
       result = await api(endpoint + '/' + encodeURIComponent(job.id));
       if (!alive()) return;
@@ -2882,6 +3399,50 @@ function batchJobByIndex(index){
   return batchEntries().find(entry => entry.job.index === index) || null;
 }
 
+function moveBatchJobToUnsent(batch, job){
+  const prompt = job.prompt;
+  const index = job.index;
+  const attempt = job.attempt;
+  for (const key of Object.keys(job)) delete job[key];
+  Object.assign(job, {prompt, index, attempt, status:'stopped', progress:0, error:'Đã hủy tác vụ. Prompt được giữ trong danh sách để xếp hàng lại sau.'});
+  renderBatchJob(batch, job);
+}
+
+async function cancelBatchJobToUnsent(index){
+  const found = batchJobByIndex(index);
+  if (!found) return false;
+  const {batch, job} = found;
+  if (!['submitting','queued','processing','running'].includes(job.status) || job.cancelling) return false;
+  job.cancelling = true;
+  job.cancelToUnsent = true;
+  job.runToken = 'cancel-to-unsent-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+  renderBatchJob(batch, job);
+  if (!job.id) {
+    toast('Đang chờ mã tác vụ để xác nhận hủy; prompt sẽ được giữ lại để xếp hàng sau đó.');
+    return false;
+  }
+  try {
+    await cancelBatchServerTask(job.id);
+    const shouldRerun = !!job.rerunAfterCancel;
+    const replacementPrompt = job.promptAfterCancel;
+    moveBatchJobToUnsent(batch, job);
+    if (replacementPrompt != null) job.prompt = replacementPrompt;
+    toast('Đã hủy tác vụ. Prompt được giữ lại để xếp hàng lại sau.');
+    if (shouldRerun) await rerunBatchJobs('one', index, {force:true});
+    return true;
+  } catch (error) {
+    job.status = 'unconfirmed';
+    job.error = 'Chưa xác nhận được hủy tác vụ. Hãy kiểm tra tác vụ trước khi gửi lại. ' + error.message;
+    delete job.cancelling;
+    delete job.cancelToUnsent;
+    delete job.rerunAfterCancel;
+    delete job.promptAfterCancel;
+    renderBatchJob(batch, job);
+    toast(job.error, 'bad');
+    return false;
+  }
+}
+
 function batchPromptEditorValue(index, job){
   const field = document.getElementById('batch-prompt-edit-' + index);
   if (field && field.parentNode) return field.value;
@@ -2889,7 +3450,6 @@ function batchPromptEditorValue(index, job){
 }
 
 function startBatchPromptEdit(index){
-  if (batchIsBusy()) return;
   const found = batchJobByIndex(index);
   if (!found) return;
   found.job.editing = true;
@@ -2911,49 +3471,243 @@ function cancelBatchPromptEdit(index){
 }
 
 async function submitBatchPromptEdit(index){
-  if (batchIsBusy()) return;
   const found = batchJobByIndex(index);
   if (!found || !found.job.editing) return;
   const text = String(batchPromptEditorValue(index, found.job) || '').trim();
   if (!text) return toast('Prompt không được để trống.', 'warn');
-  found.job.prompt = text;
-  delete found.job.editing;
-  delete found.job.draft;
+  const job = found.job;
+  if (job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || job.recoveryQueued)
+    return toast('Dòng này đang được lấy/lưu kết quả. Hãy thử lại khi thao tác xong.', 'warn');
+  if (job.editReferenceImage) {
+    try {
+      const opened=await openFolderStore('readwrite');
+      if (!opened) throw new Error('Trình duyệt không hỗ trợ lưu ảnh tham chiếu.');
+      try {
+        opened.store.put(job.editReferenceImage, 'reference:'+found.batch.id+':'+job.index);
+        await new Promise((resolve,reject)=>{opened.tx.oncomplete=resolve;opened.tx.onerror=()=>reject(new Error('Không lưu được ảnh tham chiếu.'));opened.tx.onabort=()=>reject(new Error('Không lưu được ảnh tham chiếu.'));});
+      } finally { opened.db.close(); }
+      job.referenceOverride=true;
+      job.referenceName=job.editReferenceName;
+    } catch(error) { return toast(error.message, 'bad'); }
+  }
+  delete job.editReferenceImage;
+  delete job.editReferenceName;
+  job.prompt = text;
+  delete job.editing;
+  delete job.draft;
+  if (['submitting','queued','processing','running'].includes(job.status)) {
+    await cancelAndRerunBatchJob(index, text);
+    return;
+  }
   await rerunBatchJobs('one', index, {force:true});
 }
 
+async function chooseBatchJobReference(index, input){
+  const found=batchJobByIndex(index);
+  const file=input.files && input.files[0];
+  if(!found || !found.job.editing || !file) return;
+  if(!['image/png','image/jpeg','image/webp'].includes(file.type) || file.size>10*1024*1024){
+    input.value='';
+    return toast('Chọn ảnh PNG, JPG hoặc WebP tối đa 10 MB.','warn');
+  }
+  try {
+    const data=await new Promise((resolve,reject)=>{
+      const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Không đọc được ảnh.'));reader.readAsDataURL(file);
+    });
+    found.job.editReferenceImage=data;
+    found.job.editReferenceName=file.name;
+    renderBatchJob(found.batch,found.job);
+  } catch(error){toast(error.message,'warn');}
+}
+
+function enqueueWaitingBatchRetry(batch, job, runner){
+  const position = batch.jobs.indexOf(job);
+  if (position < 0) return null;
+  const attempt = (job.attempt || 0) + 1;
+  job.deleted = true;
+  job.runToken = 'superseded-' + Date.now();
+  const replacement = {
+    prompt:job.prompt, index:job.index, attempt, status:'waiting', sendQueued:true,
+    progress:0, createdAt:Math.floor(Date.now()/1000), runToken:runner ? runner.token : null
+  };
+  batch.jobs[position] = replacement;
+  if (runner) {
+    runner.jobs = (runner.jobs || []).filter(item => item !== job);
+    runner.jobs.push(replacement);
+    runner.retryQueue = (runner.retryQueue || []).filter(entry => entry.job !== job);
+    runner.retryQueue.push({batch,job:replacement});
+    runner.entries = (runner.entries || []).filter(entry => entry.job !== job);
+  }
+  batch.directory = batchDirectory;
+  if (!runner) { batch.running = true; batch.stop = false; }
+  renderBatchJob(batch,replacement);
+  if (runner && runner.setConcurrency) runner.setConcurrency(runner.concurrency);
+  toast(`Đã đưa STT ${job.index + 1} vào hàng chờ tạo lại.`);
+  return replacement;
+}
+
+async function retryBatchJob(index){
+  const found = batchJobByIndex(index);
+  if (!found) return;
+  const job = found.job;
+  const runner = activeBatch && activeBatch.running && !activeBatch.stop && !activeBatch.abandoned
+    ? activeBatch : null;
+  if ((job.status === 'waiting' || job.sendQueued || job.preparing) &&
+      job.saveState !== 'saving' && !job.checking && !job.collecting && !job.reconnecting && !job.recoveryQueued) {
+    const replacement = enqueueWaitingBatchRetry(found.batch,job,runner);
+    if (replacement && !runner) await executeBatchEntries([{batch:found.batch,job:replacement}]);
+    return;
+  }
+  if (['submitting','queued','processing','running'].includes(job.status))
+    return cancelAndRerunBatchJob(index);
+  if (job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || job.recoveryQueued)
+    return toast('Dòng này đang được lấy/lưu kết quả. Hãy thử lại khi thao tác xong.', 'warn');
+  await rerunBatchJobs('one', index, {force:true});
+}
+
+async function cancelAndRerunBatchJob(index, replacementPrompt){
+  const found = batchJobByIndex(index);
+  if (!found) return false;
+  found.job.rerunAfterCancel = true;
+  if (replacementPrompt != null) found.job.promptAfterCancel = replacementPrompt;
+  return cancelBatchJobToUnsent(index);
+}
+
 async function rerunBatchJobs(mode, index, options){
-  if (batchIsBusy()) return;
+  const abandon = !!(options && options.abandon);
+  const currentRunner = activeBatch && activeBatch.running && !activeBatch.stop && !activeBatch.abandoned
+    ? activeBatch : null;
+  if (mode === 'one') {
+    const target = batchJobByIndex(index);
+    if (target && (target.job.status === 'waiting' || target.job.sendQueued || target.job.preparing)
+        && target.job.saveState !== 'saving' && !target.job.checking && !target.job.collecting
+        && !target.job.reconnecting && !target.job.recoveryQueued) {
+      const replacement = enqueueWaitingBatchRetry(target.batch,target.job,currentRunner);
+      if (replacement && !currentRunner) await executeBatchEntries([{batch:target.batch,job:replacement}]);
+      return;
+    }
+  }
+  if (!abandon && currentRunner && ['all','failed','one'].includes(mode)) {
+    const inflight = ['submitting','queued','processing','running'];
+    const entries = batchEntries().filter(({job}) => !inflight.includes(job.status) && job.saveState !== 'saving'
+      && !job.preparing && !job.checking && !job.collecting && !job.reconnecting && !job.recoveryQueued
+      && !(job.status === 'waiting' && job.runToken === currentRunner.token)
+      && (mode === 'failed' ? ['failed','unconfirmed','stopped'].includes(job.status)
+        : mode === 'one' ? job.index === index : true));
+    if (!entries.length) return toast('Không có prompt nào để đưa vào hàng chờ.', 'warn');
+    for (const {batch,job} of entries) {
+      const prompt = job.prompt, index = job.index, attempt = (job.attempt || 0) + 1;
+      dropLocalBatchPreview(index);
+      Object.keys(job).forEach(key=>delete job[key]);
+      Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:true,progress:0,
+        createdAt:Math.floor(Date.now()/1000),runToken:currentRunner.token});
+      batch.directory = batchDirectory;
+      if (!currentRunner.jobs.includes(job)) currentRunner.jobs.push(job);
+      if (!currentRunner.owners.includes(batch)) {
+        currentRunner.owners.push(batch);
+        batch.running = true;
+        batch.stop = false;
+      }
+      currentRunner.retryQueue.push({batch,job});
+      currentRunner.entries.push({batch,job});
+      renderBatchJob(batch,job);
+    }
+    if (currentRunner.setConcurrency) currentRunner.setConcurrency(currentRunner.concurrency);
+    updateBatchListControls();
+    toast(`\u0110\u00e3 \u0111\u01b0a ${entries.length} prompt v\u00e0o h\u00e0ng ch\u1edd; gi\u1edbi h\u1ea1n lu\u1ed3ng \u0111ang ch\u1ea1y v\u1eabn \u0111\u01b0\u1ee3c \u00e1p d\u1ee5ng.`);
+    return;
+  }
+  if (!abandon && (batchSending() || batchRestarting) && !batchRecoveringVideos) {
+    toast('Đang chờ lượt tạo hiện tại hoàn tất trước khi gửi lại prompt lỗi.');
+    while ((batchSending() || batchRestarting) && !batchRecoveringVideos && !(activeBatch && activeBatch.paused)) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
   const force = mode === 'failed' || !!(options && options.force);
   const inflight = ['submitting','queued','processing','running'];
-  const entries = batchEntries().filter(({job}) => !inflight.includes(job.status) && (
+  const entries = batchEntries().filter(({job}) => job.saveState !== 'saving'
+    && !job.preparing && !job.checking && !job.collecting && !job.reconnecting && !job.recoveryQueued
+    && (abandon ? inflight.includes(job.status) : !inflight.includes(job.status)) && (
     mode==='one' ? job.index===index
-      : mode==='unsent' ? isUnsentBatchJob(job)
-        : mode==='failed' ? ['failed','unconfirmed','stopped'].includes(job.status)
+      : mode==='failed' ? ['failed','unconfirmed','stopped'].includes(job.status)
           : true));
-  if (!entries.length) return toast(mode === 'unsent'
-    ? 'Không có prompt chưa gửi. Các prompt chưa xác nhận được giữ nguyên để tránh tạo trùng.'
-    : 'Không có prompt đã dừng hoặc lỗi để tạo lại. Prompt đang chạy được giữ nguyên.', 'warn');
+  if (!entries.length) return toast('Không có prompt đã dừng hoặc lỗi để tạo lại. Prompt đang chạy được giữ nguyên.', 'warn');
   batchRestarting = true;
-  setBatchFilter('sending');
+  let cancelFailed = false;
+  if (abandon) {
+    const runner = activeBatch && activeBatch.running ? activeBatch : null;
+    if (runner) {
+      runner.stop = true;
+      runner.abandoned = true;
+      runner.paused = false;
+      (runner.pauseWaiters || []).splice(0).forEach(resolve=>resolve());
+      const cancelJobs = (runner.jobs || []).filter(job=>inflight.includes(job.status));
+      for (const job of cancelJobs) {
+        if (!inflight.includes(job.status)) continue;
+        job.runToken = 'abandoned-' + Date.now();
+        job.status = 'stopped';
+        job.error = 'Đang hủy luồng cũ theo yêu cầu tạo mới.';
+        const owner = (runner.owners || []).find(batch=>batch.jobs.includes(job));
+        if (owner) renderBatchJob(owner, job);
+      }
+      const cancelResults = await Promise.all(cancelJobs.filter(job=>job.id).map(async job=>{
+        try {
+          const result = await cancelBatchServerTask(job.id);
+          return {job, result};
+        } catch (error) { return {job, error}; }
+      }));
+      for (const {job,result,error} of cancelResults) {
+        if (error) {
+          cancelFailed = true;
+          job.status = 'unconfirmed';
+          job.error = 'Không hủy được luồng cũ: ' + error.message;
+        } else {
+          job.error = result.stop_clicked ? 'Đã hủy luồng cũ.' : 'Đã dừng theo dõi và đóng phiên cũ.';
+        }
+        const owner = (runner.owners || []).find(batch=>batch.jobs.includes(job));
+        if (owner) renderBatchJob(owner, job);
+      }
+      if (cancelFailed) toast('Không gửi luồng mới vì máy chủ chưa xác nhận hủy luồng cũ. Hãy cập nhật/khởi động lại máy chủ rồi thử lại.', 'bad');
+    } else {
+      for (const {job} of entries) {
+        job.runToken = 'abandoned-' + Date.now();
+        if (!job.id) continue;
+        try {
+          const result = await cancelBatchServerTask(job.id);
+          job.error = result.stop_clicked ? 'Đã hủy luồng cũ.' : 'Đã dừng theo dõi và đóng phiên cũ.';
+        } catch (error) {
+          cancelFailed = true;
+          job.status = 'unconfirmed';
+          job.error = 'Không hủy được luồng cũ: ' + error.message;
+        }
+        const owner = batchEntries().find(entry=>entry.job === job)?.batch;
+        if (owner) renderBatchJob(owner, job);
+      }
+      if (cancelFailed) toast('Không gửi luồng mới vì máy chủ chưa xác nhận hủy luồng cũ. Hãy cập nhật/khởi động lại máy chủ rồi thử lại.', 'bad');
+    }
+  }
   updateBatchListControls();
   try {
+    if (cancelFailed) return;
     for (const {batch, job} of entries) {
       job.preparing = true;
       renderBatchJob(batch, job);
     }
-    toast(`Đã đưa ${entries.length} prompt vào hàng chờ gửi.`);
     const pending = [];
     for (const entry of entries) {
+      if (entry.job.deleted) continue;
       if (!force && await collectRenderedJob(entry.job.index, {keepError:true, allowWhileRunning:true})) {
         delete entry.job.preparing;
         renderBatchJob(entry.batch, entry.job);
         continue;
       }
+      if (entry.job.deleted) continue;
       pending.push(entry);
     }
     if (!pending.length) return;
+    toast(`Đã đưa ${pending.length} prompt vào hàng chờ; tối đa ${batchParallelLimit()} luồng chạy đồng thời.`);
     for (const {batch,job} of pending) {
+      if (job.deleted) continue;
       dropLocalBatchPreview(job.index);
       const attempt=(job.attempt || 0)+1;
       const {prompt,index}=job;
@@ -2961,8 +3715,8 @@ async function rerunBatchJobs(mode, index, options){
       Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:mode === 'failed',progress:0,createdAt:Math.floor(Date.now()/1000)});
       batch.directory=batchDirectory;
     }
-    if (mode === 'failed') setBatchFilter('sending');
-    await executeBatchEntries(pending);
+    const remaining = pending.filter(({job}) => !job.deleted);
+    if (remaining.length) await executeBatchEntries(remaining);
   } finally {
     batchRestarting = false;
     updateBatchListControls();
@@ -3005,13 +3759,12 @@ async function requeueFailedBatchJobs(){
 
 let batchServerLimits = {total:10, perAccount:5};
 function applyBatchServerLimits(config){
-  const total = Math.max(1, Math.floor(Number(config.max_concurrency) || 10));
+  const total = Math.max(1, Math.min(10, Math.floor(Number(config.max_concurrency) || 2)));
   const perAccount = Math.max(1, Math.floor(Number(config.per_account_concurrency) || 5));
   const select = $('batchConcurrency');
-  const selected = Math.min(total, Math.max(1, Number(select.value) || total));
   batchServerLimits = {total, perAccount};
-  select.innerHTML = Array.from({length:total}, (_, i) => `<option value="${i+1}">${i+1}</option>`).join('');
-  select.value = String(selected);
+  select.innerHTML = Array.from({length:10}, (_, i) => `<option value="${i+1}">${i+1}</option>`).join('');
+  select.value = String(total);
   $('batchConcurrencyHint').textContent = `Toàn hệ thống tối đa ${total} tác vụ đồng thời; mỗi tài khoản tối đa ${perAccount}. Tác vụ được phân bổ cho các tài khoản đang bật, trong giới hạn này.`;
 }
 function batchParallelLimit(){
@@ -3021,10 +3774,10 @@ function batchParallelLimit(){
 function enabledBatchAccounts(){
   return (Array.isArray(accounts) ? accounts : []).filter(account => account && account.enabled !== false && account.id && account.essential_ok !== false && (account.cookie_count == null || account.cookie_count > 0));
 }
-function batchAccountLanes(count){
+function batchAccountLanes(count, totalLimit=batchServerLimits.total){
   const live = enabledBatchAccounts();
   const lanes = [];
-  const capacity = Math.min(count, batchServerLimits.total, live.length ? live.length * batchServerLimits.perAccount : batchServerLimits.total);
+  const capacity = Math.min(count, totalLimit, live.length ? live.length * batchServerLimits.perAccount : totalLimit);
   for (let i = 0; i < capacity; i++) lanes.push(live.length ? live[i % live.length].id : '');
   return lanes;
 }
@@ -3036,31 +3789,83 @@ function queueBatchSave(runner, batch, job){
   });
 }
 
+async function cancelBatchServerTask(taskId){
+  let result;
+  try {
+    result = await api('/admin/tasks/' + encodeURIComponent(taskId) + '/cancel', {method:'POST'});
+  } catch (error) {
+    if (error.status === 404) {
+      throw new Error('Server đang chạy chưa có API hủy tác vụ. Hãy khởi động lại muse2api bằng phiên bản mới rồi thử hủy lại.');
+    }
+    throw error;
+  }
+  if (!result.cancelled && ['queued','processing'].includes(result.status))
+    throw new Error('Máy chủ chưa xác nhận hủy tác vụ');
+  return result;
+}
+
 async function executeBatchEntries(entries){
   if (activeBatch && activeBatch.running) {
     activeBatch.stop = true;
     activeBatch.abandoned = true;
+    activeBatch.paused = false;
+    (activeBatch.pauseWaiters || []).splice(0).forEach(resolve=>resolve());
   }
-  const runner={jobs:entries.map(({job})=>job),running:true,stop:false,abandoned:false,next:0,token:'run-'+Date.now()+'-'+Math.random().toString(36).slice(2)};
+  const runner={jobs:entries.map(({job})=>job),running:true,stop:false,abandoned:false,paused:false,pauseWaiters:[],retryQueue:[],next:0,token:'run-'+Date.now()+'-'+Math.random().toString(36).slice(2)};
   activeBatch=runner;
   runner.jobs.forEach(job=>{job.runToken=runner.token;});
   const owners=[...new Set(entries.map(({batch})=>batch))];
   runner.entries = entries;
   runner.owners = owners;
   owners.forEach(batch=>{batch.running=true;batch.stop=false;});
-  const controls=['batchStart','batchKind','batchSize','batchDuration','batchConcurrency','batchPrompts','batchChooseFolder','batchClearFolder','batchReferenceInput','batchReferenceClear'];
+  const controls=['batchStart','batchKind','batchSize','batchDuration','batchPrompts','batchChooseFolder','batchClearFolder','batchReferenceInput','batchReferenceClear'];
   controls.forEach(id=>{$(id).disabled=true;}); $('batchStop').disabled=false;
+  $('batchPause').disabled=false; $('batchResume').disabled=true;
   rebuildBatchTable();
   const concurrency = batchParallelLimit();
   runner.concurrency=concurrency;
   const autoRetry = $('batchAutoRetry').checked && entries.some(({batch})=>batch.kind === 'video');
   const retried = new Set();
-  const lanes = batchAccountLanes(autoRetry ? concurrency : Math.min(concurrency, entries.length));
-  const worker=async(accountId)=>{
+  const lanes = batchAccountLanes(10, 10);
+  const workerPromises=[];
+  const activeLanes=new Set();
+  const pendingWorkCount=()=>{
+    const queued=(runner.retryQueue || []).filter(entry=>entry && entry.job && !entry.job.deleted).length;
+    let remaining=0;
+    for(let i=runner.next;i<entries.length;i++) if(entries[i] && entries[i].job && !entries[i].job.deleted) remaining++;
+    return queued+remaining;
+  };
+  const launchLane=(laneIndex)=>{
+    if (laneIndex>=lanes.length || activeLanes.has(laneIndex) || runner.stop || runner.abandoned) return;
+    activeLanes.add(laneIndex);
+    const promise=worker(lanes[laneIndex],laneIndex).finally(()=>{
+      activeLanes.delete(laneIndex);
+      if (!runner.stop && !runner.abandoned && laneIndex<runner.concurrency
+          && pendingWorkCount()>0)
+        launchLane(laneIndex);
+      const owner=owners[0];
+      if(owner) renderBatchSummary(owner);
+    });
+    workerPromises.push(promise);
+  };
+  runner.setConcurrency=(value)=>{
+    const limit=Math.max(1,Math.min(10,Math.floor(Number(value)||1)));
+    runner.concurrency=limit;
+    const target=Math.min(limit,lanes.length,activeLanes.size+pendingWorkCount());
+    for(let i=0;i<target;i++) launchLane(i);
+  };
+  runner.activeWorkerCount=()=>activeLanes.size;
+  const worker=async(accountId,laneIndex)=>{
     while(!runner.stop && !runner.abandoned){
-      let entry = runner.next<entries.length ? entries[runner.next++] : null;
+      if(runner.paused){
+        await new Promise(resolve=>runner.pauseWaiters.push(resolve));
+        continue;
+      }
+      if(laneIndex>=runner.concurrency) return;
+      let entry = runner.retryQueue && runner.retryQueue.length ? runner.retryQueue.shift()
+        : runner.next<entries.length ? entries[runner.next++] : null;
       if (!entry && autoRetry) {
-        entry = batchEntries().find(({batch,job})=>batch.kind==='video' && job.status==='failed'
+        entry = runner.entries.find(({batch,job})=>batch.kind==='video' && job.status==='failed'
           && !String(job.error || '').includes('MUSE_ACTION_REQUIRED:')
           && !job.preparing && !job.collecting && !job.checking && !job.reconnecting && !job.editing
           && job.saveState!=='saving' && !safeBatchMediaUrl(job.url) && !retried.has(job));
@@ -3077,24 +3882,27 @@ async function executeBatchEntries(entries){
               const result = await api('/admin/tasks/' + encodeURIComponent(job.id) + '/collect', {
                 method:'POST',body:JSON.stringify({muse_url:safeMuseThreadUrl(job.museUrl) || ''})
               });
+              if (job.deleted) continue;
               if (runner.abandoned || job.runToken!==runner.token) return;
               const media=(result.data && result.data[0]) || result.result || result.video || result;
               if (['completed','succeeded'].includes(result.status) && safeBatchMediaUrl(media.url || result.url || '')) {
                 applyCollectedTask(batch,job,result);
                 if (batch.directory) queueBatchSave(runner,batch,job);
-                continue;
+                return;
               }
               // An existing task may still be running; do not submit a duplicate.
-              if (result.status!=='failed') continue;
+              if (result.status!=='failed') return;
             }
           } catch (error) {
+            if (job.deleted) continue;
             if (runner.abandoned || job.runToken!==runner.token) return;
             // Busy, auth and missing task errors need a later recovery attempt.
-            if (error.status!==502 || /đang bận|busy/i.test(error.message)) continue;
+            if (error.status!==502 || /đang bận|busy/i.test(error.message)) return;
           } finally {
             delete job.preparing;
             renderBatchJob(batch,job);
           }
+          if (job.deleted) continue;
           if (runner.stop || runner.abandoned || job.runToken!==runner.token) break;
           dropLocalBatchPreview(job.index);
           const {prompt,index}=job, attempt=(job.attempt || 0)+1;
@@ -3104,16 +3912,35 @@ async function executeBatchEntries(entries){
       }
       if (!entry) break;
       const {batch,job}=entry;
+      if (job.deleted) continue;
       try{await processBatchJob(batch,job,runner,accountId);}
       catch(error){
         if (job.runToken===runner.token) {
           job.status='unconfirmed';job.error='Lỗi theo dõi tác vụ: '+error.message;stopBatch(runner);renderBatchJob(batch,job);
         }
       }
+      return;
     }
   };
   try{
-    await Promise.all(lanes.map(accountId=>worker(accountId)));
+    runner.setConcurrency(concurrency);
+    let awaited=0;
+    while(true){
+      if(awaited<workerPromises.length){
+        const end=workerPromises.length;
+        await Promise.all(workerPromises.slice(awaited,end));
+        awaited=end;
+        continue;
+      }
+      await Promise.resolve();
+      if(awaited<workerPromises.length) continue;
+      if((runner.retryQueue && runner.retryQueue.length) || runner.next<entries.length){
+        runner.setConcurrency(runner.concurrency);
+        continue;
+      }
+      break;
+    }
+    runner.running=false;
     await runner.saveTail;
   }
   finally{
@@ -3121,6 +3948,8 @@ async function executeBatchEntries(entries){
     if (runner.abandoned || activeBatch !== runner) return;
     owners.forEach(batch=>{batch.running=false;});
     controls.forEach(id=>{$(id).disabled=false;}); $('batchStop').disabled=true;
+    $('batchPause').disabled=true;
+    $('batchResume').disabled=!batchHasResumableJobs(runner);
     $('batchClearFolder').disabled=!batchDirectory;
     rebuildBatchTable();
     renderBatchSummary(owners[0]);loadTasks();loadMedia();
@@ -3129,135 +3958,9 @@ async function executeBatchEntries(entries){
 
 
 /* ================= Kiểm tra cập nhật và nâng cấp ================= */
-let _notifiedSha = localStorage.getItem('muse2api_notified_sha') || '';
-let _dismissedSha = localStorage.getItem('muse2api_dismissed_sha') || '';
-let _lastRepoStatus = null;
-
-function toggleRepoPanel(){
-  const el = $('repoPanel');
-  if (!el) return;
-  const show = el.style.display === 'none';
-  el.style.display = show ? 'block' : 'none';
-  if (show) loadRepoStatus(false);
-}
-
-function dismissUpdateBanner(){
-  if (_lastRepoStatus && _lastRepoStatus.remote_sha){
-    _dismissedSha = _lastRepoStatus.remote_sha;
-    localStorage.setItem('muse2api_dismissed_sha', _dismissedSha);
-  }
-  $('updateBanner').classList.remove('show');
-}
-
-async function loadRepoStatus(force){
-  try{
-    let s = await api('/admin/update/check' + (force ? '?force=true' : ''));
-    // Nếu máy chủ không truy cập được GitHub, kiểm tra qua trình duyệt.
-    if (!s.remote_sha){
-      try{
-        const gr = await fetch('https://api.github.com/repos/czg86389-hub/muse2api/commits?sha=main&per_page=5');
-        if (gr.ok){
-          const commits = await gr.json();
-          if (Array.isArray(commits) && commits.length){
-            s.remote_sha = (commits[0].sha || '').slice(0, 7);
-            s.remote_msg = ((commits[0].commit || {}).message || '').split('\n')[0];
-            s.recent_commits = commits.map(c => ({
-              sha: (c.sha || '').slice(0, 7),
-              message: ((c.commit || {}).message || '').split('\n')[0],
-              date: ((c.commit || {}).committer || {}).date || '',
-              url: c.html_url || 'https://github.com/czg86389-hub/muse2api'
-            }));
-            if (s.local_sha && s.remote_sha && s.local_sha !== s.remote_sha){
-              s.has_update = true;
-              s.up_to_date = false;
-            }
-          }
-        }
-      }catch(_){}
-    }
-    _lastRepoStatus = s;
-    const badge = $('repoBadge');
-    const topBtn = $('btnRepoTop');
-    const topTxt = $('repoTopTxt');
-    const desc = $('repoStatusDesc');
-    const box = $('repoCommitsBox');
-    const banner = $('updateBanner');
-    const lVer = 'v' + (s.local_version || '1.5.0');
-    const rVer = 'v' + (s.remote_version || s.local_version || '1.5.0');
-
-    if (s.has_update){
-      badge.className = 'badge warn';
-      badge.textContent = `🔔 Có phiên bản mới ${rVer} (${s.remote_sha || 'latest'})`;
-      topBtn.classList.add('updpill-alert');
-      topBtn.innerHTML = `🔔 <span id="repoTopTxt">Có cập nhật mới (${esc(s.remote_sha || rVer)})</span>`;
-      $('updBannerVer').textContent = `${lVer} (${s.local_sha || 'bản cũ'}) → ${rVer} (${s.remote_sha || 'mới nhất'})`;
-      $('updBannerMsg').innerHTML = `Commit mới nhất: <b>${esc(s.remote_msg || 'Cải thiện hiệu năng và tính năng')}</b> · Nhấn nút bên phải “⚡ Cập nhật và khởi động lại” để tải bản mới (giữ cấu hình và dữ liệu tài khoản).`;
-      if (_dismissedSha !== s.remote_sha){
-        banner.classList.add('show');
-      }
-      if (_notifiedSha !== s.remote_sha && s.remote_sha){
-        _notifiedSha = s.remote_sha;
-        localStorage.setItem('muse2api_notified_sha', _notifiedSha);
-        toast(`🔔 Kho chính thức có cập nhật mới (${s.remote_sha}): ${s.remote_msg || 'Nhấn nút cập nhật ở đầu trang'}`, 'warn');
-      }
-    } else {
-      badge.className = 'badge ok';
-      badge.textContent = `✓ Đã là bản mới nhất ${lVer} (${s.local_sha || 'main'})`;
-      topBtn.classList.remove('updpill-alert');
-      topBtn.innerHTML = `📦 <span id="repoTopTxt">${esc(lVer)} · Đã là bản mới nhất</span>`;
-      banner.classList.remove('show');
-    }
-
-    desc.innerHTML = `Phiên bản đang chạy: <code>${esc(lVer)}</code> (Commit: <code>${esc(s.local_sha || '—')}</code>) · ` +
-      `GitHub Bản mới nhất trên kho chính thức: <code>${esc(rVer)}</code> (Commit: <code>${esc(s.remote_sha || '—')}</code> ${esc(s.remote_msg || '')})`;
-
-    let html = '';
-    if (Array.isArray(s.highlights) && s.highlights.length){
-      html += `<div style="margin-bottom:8px"><b style="color:var(--text)">✨ Tính năng chính của phiên bản (${esc(rVer)}): </b><ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">` +
-        s.highlights.map(h => `<li>${esc(uiText(h))}</li>`).join('') + `</ul></div>`;
-    }
-    if (Array.isArray(s.recent_commits) && s.recent_commits.length){
-      html += `<div><b style="color:var(--text)">📜 Commit gần đây trên kho chính thức: </b><div style="margin-top:5px;display:flex;flex-direction:column;gap:4px">` +
-        s.recent_commits.slice(0, 5).map(c =>
-          `<div style="display:flex;gap:8px;align-items:center"><a href="${esc(c.url)}" target="_blank" class="mono" style="color:var(--accent)">[${esc(c.sha)}]</a><span>${esc(uiText(c.message))}</span><span class="mono" style="margin-left:auto">${esc((c.date||'').replace('T',' ').replace('Z',''))}</span></div>`
-        ).join('') + `</div></div>`;
-    }
-    if (box) box.innerHTML = html || '<span style="color:var(--muted)">Chưa có lịch sử commit</span>';
-    if (force) toast(s.has_update ? '🔔 Đã phát hiện phiên bản mới!' : '✓ Đang dùng phiên bản mới nhất từ kho chính thức', s.has_update ? 'warn' : 'ok');
-  }catch(e){
-    if ($('repoBadge')) { $('repoBadge').className = 'badge mute'; $('repoBadge').textContent = 'Chờ xác thực'; }
-  }
-}
-
-async function upgradeNow(){
-  if (!confirm('Bạn muốn lấy ngay từ GitHub kho chính thức (czg86389-hub/muse2api) mã mới nhất và tự động khởi động lại dịch vụ?\n\n(Lưu ý: dữ liệu cục bộ gồm .env khóa, nhóm tài khoản Cookie và media đã tạo được tự động giữ lại)')) return;
-  const btn1 = $('btnRepoPull'), btn2 = $('btnBannerUpgrade');
-  if (btn1) { btn1.disabled = true; btn1.innerHTML = '<span class="spin"></span>Đang cập nhật trực tuyến…'; }
-  if (btn2) { btn2.disabled = true; btn2.innerHTML = '<span class="spin"></span>Đang cập nhật trực tuyến…'; }
-  try{
-    const r = await api('/admin/update/upgrade', {method: 'POST', body: JSON.stringify({restart: true})});
-    toast('✓ ' + (uiText(r.message) || 'Cập nhật hoàn tất') + ', dịch vụ đang khởi động lại; trang sẽ tự làm mới khi sẵn sàng…', 'ok');
-    $('updateBanner').classList.remove('show');
-    let tries = 0;
-    const waitReady = async () => {
-      tries++;
-      try{
-        const hr = await fetch('/healthz?t=' + Date.now(), {cache: 'no-store'});
-        if (hr.ok) { location.reload(); return; }
-      }catch(_){}
-      if (tries < 20) setTimeout(waitReady, 1000);
-      else location.reload();
-    };
-    setTimeout(waitReady, 2500);
-  }catch(e){
-    toast('Cập nhật trực tuyến thất bại: ' + uiText(e.message), 'bad');
-    if (btn1) { btn1.disabled = false; btn1.textContent = '⚡ Lấy từ GitHub để cập nhật và khởi động lại'; }
-    if (btn2) { btn2.disabled = false; btn2.textContent = '⚡ Cập nhật và khởi động lại'; }
-  }
-}
-
 /* ================= Làm mới tổng quan ================= */
 async function loadStatus(){
+  if (!$('tab-pool').classList.contains('active')) return;
   try{
     const d = await api('/admin/status');
     if (d.config) applyBatchServerLimits(d.config);
@@ -3278,7 +3981,10 @@ async function loadStatus(){
   }
 }
 
-function refreshAll(){ loadStatus(); loadPool(); loadApikey(); loadRepoStatus(false); }
+function refreshAll(){
+  if ($('tab-pool').classList.contains('active')) { loadStatus(); loadPool(); }
+  loadApikey();
+}
 
 $('inBase').value = UI_DEFAULTS.baseUrl;
 renderKey();
@@ -3290,11 +3996,532 @@ if (typeof document.addEventListener === 'function') {
   });
 }
 restoreBatchSettings();
+restoreBatchSetup();
 restoreBatchPromptDraft();
+let imageVideoJobs = [];
+let imageVideoBusy = false;
+let imageVideoPauseRequested = false;
+let imageVideoRun = null;
+let imageVideoFlowId = 'iv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+let imageVideoImageReferenceName = '';
+let imageVideoImageReferenceLoading = false;
+const IMAGE_VIDEO_STORE = 'muse2api_image_video_flow_v1';
+function persistImageVideoFlow(){
+  try{
+    localStorage.setItem(IMAGE_VIDEO_STORE,JSON.stringify({
+      flowId:imageVideoFlowId,imageMode:$('ivImageMode').value,
+      imagePrompts:$('ivImagePrompts').value,videoPrompts:$('ivVideoPrompts').value,
+      size:$('ivSize').value,workers:$('ivWorkers').value,imageReferenceName:imageVideoImageReferenceName,
+      jobs:imageVideoJobs.map(job=>{const saved={...job,editingImagePrompt:false,editingVideoPrompt:false};delete saved.uploadPreviewUrl;if(saved.imageSource==='upload')delete saved.imageUrl;return saved;})
+    }));
+  }catch(_){/* Keep the generation flow usable if browser storage is full. */}
+}
+async function restoreImageVideoFlow(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(IMAGE_VIDEO_STORE)||'null');
+    if(!saved){updateImageVideoModeUI();return;}
+    if(typeof saved.flowId==='string')imageVideoFlowId=saved.flowId;
+    imageVideoImageReferenceName=typeof saved.imageReferenceName==='string'?saved.imageReferenceName:'';
+    if(imageVideoImageReferenceName){
+      const blob=await readImageVideoUpload('iv-reference:'+imageVideoFlowId);
+      if(blob)showImageVideoImageReference(blob,imageVideoImageReferenceName);
+      else imageVideoImageReferenceName='';
+    }
+    if(['generate','upload'].includes(saved.imageMode))$('ivImageMode').value=saved.imageMode;
+    $('ivImagePrompts').value=typeof saved.imagePrompts==='string'?saved.imagePrompts:'';
+    $('ivVideoPrompts').value=typeof saved.videoPrompts==='string'?saved.videoPrompts:'';
+    if(['16:9','9:16','1:1','4:3','3:4'].includes(saved.size))$('ivSize').value=saved.size;
+    if(/^(?:[1-9]|10)$/.test(String(saved.workers||'')))$('ivWorkers').value=String(saved.workers);
+    if(Array.isArray(saved.jobs))imageVideoJobs=saved.jobs.filter(job=>job&&typeof job.imagePrompt==='string'&&typeof job.videoPrompt==='string').slice(0,1000);
+    for(const job of imageVideoJobs){
+      delete job.editingImagePrompt;delete job.editingVideoPrompt;
+      if(job.imageSource==='upload'&&job.uploadKey){
+        const blob=await readImageVideoUpload(job.uploadKey);
+        if(blob)job.uploadPreviewUrl=URL.createObjectURL(blob);
+        else{job.imageStatus='Lỗi';job.error='Không tìm thấy ảnh upload đã lưu. Hãy tải ảnh lên lại.';}
+      }
+      if(job.imageStatus==='Đang xử lý'&&!job.imageTaskId)job.imageStatus='Chưa tạo';
+      if(job.videoStatus==='Đang xử lý'&&!job.videoTaskId)job.videoStatus='Chưa tạo';
+      if(job.imageStatus==='Đang xử lý'||job.videoStatus==='Đang xử lý')job.error='Đang nối lại tác vụ sau khi tải lại trang…';
+    }
+    renderImageVideoJobs();
+    updateImageVideoModeUI();
+    $('ivSummary').textContent=imageVideoJobs.length
+      ? `Đã khôi phục ${imageVideoJobs.length} dòng; trạng thái và kết quả được giữ lại sau khi tải lại trang.`
+      : 'Nhập hai danh sách prompt có cùng số dòng.';
+    persistImageVideoFlow();
+  }catch(_){imageVideoJobs=[];}
+}
+function renderImageVideoJobs(){
+  const body=$('ivResults');
+  if(!imageVideoJobs.length){body.innerHTML='<tr><td colspan="6" class="empty">Chưa có prompt.</td></tr>';return;}
+  body.innerHTML=imageVideoJobs.map((job,index)=>{
+    const previewUrl=job.imageSource==='upload'?job.uploadPreviewUrl:job.imageUrl;
+    const image=previewUrl ? `<a href="${esc(job.imageSource==='upload'?previewUrl:safeBatchMediaUrl(previewUrl))}" target="_blank" rel="noopener"><img src="${esc(job.imageSource==='upload'?previewUrl:safeBatchMediaUrl(previewUrl))}" alt="Ảnh ${index+1}" style="width:130px;height:90px;object-fit:contain;background:#060911;border-radius:8px"></a>${safeBatchMediaUrl(job.imageMuseUrl)?`<div><a href="${esc(safeBatchMediaUrl(job.imageMuseUrl))}" target="_blank" rel="noopener">Link ảnh Muse</a></div>`:''}` : '—';
+    const video=job.videoUrl ? `<button type="button" class="badge info" onclick="openImageVideoVideo(${index})">Mở video</button>` : '—';
+    const imagePrompt=job.imageSource==='upload'?`Ảnh tải lên: ${esc(job.uploadName||('ảnh '+String(index+1).padStart(3,'0')))}${job.editingImagePrompt?`<div class="hint">Ảnh upload không dùng prompt tạo ảnh.</div>`:''}`:job.editingImagePrompt
+      ? `<textarea rows="4" id="iv-image-prompt-${index}" style="min-width:220px">${esc(job.imagePrompt)}</textarea><div class="acts"><button class="mini" onclick="saveImageVideoImagePrompt(${index})">Lưu prompt</button><button class="ghost mini" onclick="cancelImageVideoImagePrompt(${index})">Hủy</button></div>`
+      : `<div class="prompt-text">${esc(job.imagePrompt)}</div><button class="ghost mini" onclick="editImageVideoImagePrompt(${index})">Sửa prompt ảnh</button>`;
+    const videoPrompt=job.editingVideoPrompt
+      ? `<textarea rows="4" id="iv-video-prompt-${index}" style="min-width:220px">${esc(job.videoPrompt)}</textarea><div class="acts"><button class="mini" onclick="saveImageVideoVideoPrompt(${index})">Lưu prompt</button><button class="ghost mini" onclick="cancelImageVideoVideoPrompt(${index})">Hủy</button></div>`
+      : `<div class="prompt-text">${esc(job.videoPrompt)}</div><button class="ghost mini" onclick="editImageVideoVideoPrompt(${index})">Sửa prompt video</button>`;
+    const imageThread=safeMuseThreadUrl(job.imageMuseThreadUrl);
+    const videoThread=safeMuseThreadUrl(job.videoMuseThreadUrl);
+    const imageAction=job.imageSource==='upload'?'':`<button class="ghost mini" onclick="retryImageVideoImage(${index})" ${imageVideoBusy||!job.imagePrompt.trim()?'disabled':''}>Tạo lại ảnh</button>`;
+    const replaceUpload=job.imageSource==='upload'?`<button type="button" class="ghost mini" onclick="document.getElementById('iv-replace-image-${index}').click()" ${imageVideoBusy?'disabled':''}>Thay ảnh</button><input id="iv-replace-image-${index}" type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="replaceImageVideoUpload(${index},this)">`:'';
+    return `<tr><td class="mono">${String(index+1).padStart(3,'0')}</td><td>${image}<div class="hint">${esc(job.imageStatus||'Chưa tạo')}</div>${job.imageAccountLabel?`<div class="hint">Tài khoản: ${esc(job.imageAccountLabel)}</div>`:''}${imageThread?`<div><a href="${esc(imageThread)}" target="_blank" rel="noopener">Thread ảnh Muse</a></div>`:''}</td><td class="batch-prompt">${imagePrompt}</td><td class="batch-prompt">${videoPrompt}</td><td>${video}<div class="hint">${esc(job.videoStatus||'Chưa tạo')}</div>${job.videoAccountLabel?`<div class="hint">Tài khoản: ${esc(job.videoAccountLabel)}</div>`:''}${videoThread?`<div><a href="${esc(videoThread)}" target="_blank" rel="noopener">Thread video Muse</a></div>`:''}</td><td>${job.error?`<div class="batch-error">${esc(uiText(job.error))}</div>`:''}<div class="acts">${imageAction}<button class="ghost mini" onclick="retryImageVideoVideo(${index})" ${imageVideoBusy||job.imageStatus!=='Hoàn thành'||!job.videoPrompt.trim()?'disabled':''}>${job.videoStatus==='Hoàn thành'?'Tạo lại video':'Tạo video'}</button></div></td></tr>`;
+  }).join('');
+  const canCreateVideo=imageVideoJobs.some(job=>job.imageStatus==='Hoàn thành'&&job.videoPrompt.trim()&&job.videoStatus!=='Hoàn thành');
+  $('ivCreateVideos').disabled=imageVideoBusy||!canCreateVideo;
+  persistImageVideoFlow();
+}
+function showImageVideoImageReference(blob,name){
+  const preview=$('ivImageReferencePreview');
+  if(preview.dataset.url)URL.revokeObjectURL(preview.dataset.url);
+  const url=URL.createObjectURL(blob);preview.dataset.url=url;
+  preview.innerHTML=`<img src="${esc(url)}" alt="Ảnh tham chiếu tạo ảnh" style="max-width:180px;max-height:130px;object-fit:contain;display:block;margin:6px 0;border-radius:8px"><span>${esc(name)}</span>`;
+  $('ivImageReferenceClear').style.display='';
+}
+async function chooseImageVideoImageReference(input){
+  const file=input&&input.files&&input.files[0];if(!file)return;
+  if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024){input.value='';return toast('Chọn ảnh PNG, JPG hoặc WebP tối đa 10 MB.','warn');}
+  imageVideoImageReferenceLoading=true;
+  try{
+    const opened=await openFolderStore('readwrite');if(!opened)throw new Error('Trình duyệt không hỗ trợ lưu ảnh tham chiếu.');
+    try{opened.store.put(file,'iv-reference:'+imageVideoFlowId);await new Promise((resolve,reject)=>{opened.tx.oncomplete=resolve;opened.tx.onerror=()=>reject(opened.tx.error||new Error('Không lưu được ảnh tham chiếu.'));opened.tx.onabort=()=>reject(opened.tx.error||new Error('Không lưu được ảnh tham chiếu.'));});}finally{opened.db.close();}
+    imageVideoImageReferenceName=file.name;showImageVideoImageReference(file,file.name);persistImageVideoFlow();toast('Đã chọn ảnh tham chiếu cho prompt tạo ảnh.','ok');
+  }catch(error){toast(error.message,'warn');}finally{imageVideoImageReferenceLoading=false;input.value='';}
+}
+async function clearImageVideoImageReference(){
+  if(imageVideoBusy)return;
+  try{const opened=await openFolderStore('readwrite');if(opened){opened.store.delete('iv-reference:'+imageVideoFlowId);await new Promise(resolve=>{opened.tx.oncomplete=resolve;opened.tx.onerror=resolve;opened.tx.onabort=resolve;});opened.db.close();}}catch(_){}
+  const preview=$('ivImageReferencePreview');if(preview.dataset.url)URL.revokeObjectURL(preview.dataset.url);preview.dataset.url='';preview.innerHTML='';$('ivImageReferenceClear').style.display='none';$('ivImageReferenceInput').value='';imageVideoImageReferenceName='';persistImageVideoFlow();
+}
+async function replaceImageVideoUpload(index,input){
+  const file=input&&input.files&&input.files[0];
+  if(!file)return;
+  try{
+    const job=imageVideoJobs[index];
+    if(imageVideoBusy||!job||job.imageSource!=='upload')return;
+    if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024)
+      throw new Error('Ảnh phải là PNG/JPG/WebP và tối đa 10 MB.');
+    const opened=await openFolderStore('readwrite');
+    if(!opened)throw new Error('Trình duyệt không hỗ trợ lưu ảnh upload.');
+    try{
+      opened.store.put(file,job.uploadKey);
+      await new Promise((resolve,reject)=>{
+        opened.tx.oncomplete=resolve;
+        opened.tx.onerror=()=>reject(opened.tx.error||new Error('Không lưu được ảnh thay thế.'));
+        opened.tx.onabort=()=>reject(opened.tx.error||new Error('Không lưu được ảnh thay thế.'));
+      });
+    }finally{opened.db.close();}
+    if(job.uploadPreviewUrl)URL.revokeObjectURL(job.uploadPreviewUrl);
+    job.uploadPreviewUrl=URL.createObjectURL(file);
+    job.uploadName=file.name;
+    job.imagePrompt=`Ảnh tải lên: ${file.name}`;
+    job.imageStatus='Hoàn thành';
+    job.videoStatus='Chưa tạo';
+    job.videoUrl='';
+    job.error='';
+    delete job.videoTaskId;delete job.videoAccountId;delete job.videoAccountLabel;delete job.videoMuseThreadUrl;
+    renderImageVideoJobs();
+    $('ivSummary').textContent=`Đã thay ảnh cảnh ${String(index+1).padStart(3,'0')}. Hãy kiểm tra ảnh rồi tạo lại video.`;
+    toast('Đã thay ảnh cho cảnh '+String(index+1).padStart(3,'0'),'ok');
+  }catch(error){toast('Thay ảnh thất bại: '+error.message,'error');}
+  finally{if(input)input.value='';}
+}
+function imageVideoSetBusy(busy,stage){
+  imageVideoBusy=busy;
+  $('ivPause').style.display=busy?'':'none';
+  $('ivPause').disabled=false;
+  $('ivPause').textContent='Tạm dừng';
+  $('ivUpdatePrompts').disabled=busy;
+  $('ivLoadVideoPrompts').disabled=busy;
+  $('ivCreateImages').disabled=busy;
+  $('ivReset').disabled=busy;
+  $('ivCreateVideos').disabled=busy||!imageVideoJobs.some(job=>job.imageStatus==='Hoàn thành'&&job.videoPrompt.trim()&&job.videoStatus!=='Hoàn thành');
+  if(busy){$('ivSummary').textContent=`Đang tạo ${stage==='image'?'ảnh':'video'} · ${imageVideoJobs.filter(job=>job[stage+'Status']==='Đang xử lý').length}/${imageVideoJobs.length} đang xử lý.`;}
+  renderImageVideoJobs();
+}
+function pauseImageVideoJobs(){
+  if(!imageVideoBusy||imageVideoPauseRequested)return;
+  imageVideoPauseRequested=true;
+  $('ivPause').disabled=true;
+  $('ivPause').textContent='Đang dừng…';
+  $('ivSummary').textContent='Đang chờ các tác vụ đang chạy kết thúc. Danh sách sẽ mở để sửa sau đó.';
+}
+function imageVideoWorkersChanged(){
+  persistImageVideoFlow();
+  if(!imageVideoRun)return;
+  imageVideoEnsureWorkers(imageVideoRun);
+  $('ivSummary').textContent=`Đã áp dụng ${imageVideoRun.desired} worker; mức chạy song song đang được điều chỉnh ngay.`;
+}
+function imageVideoPromptLists(){
+  const images=splitBatchPrompts($('ivImagePrompts').value);
+  const videos=splitBatchPrompts($('ivVideoPrompts').value);
+  if(!images.length&&!videos.length) throw new Error('Hãy nhập prompt ảnh hoặc prompt video.');
+  return {images,videos};
+}
+function prepareImageVideoJobs(){
+  if(imageVideoJobs.length) return;
+  if($('ivImageMode').value==='upload')return;
+  const {images,videos}=imageVideoPromptLists();
+  const count=Math.max(images.length,videos.length);
+  imageVideoJobs=Array.from({length:count},(_,index)=>({imagePrompt:images[index]||'',videoPrompt:videos[index]||'',imageSource:'generated',imageStatus:images[index]?'Chưa tạo':'Chưa có prompt',videoStatus:videos[index]?'Chưa tạo':'Chưa có prompt',imageUrl:'',videoUrl:'',error:''}));
+  renderImageVideoJobs();
+}
+function resetImageVideoFlow(){
+  if(imageVideoBusy) return;
+  const oldFlowId=imageVideoFlowId;
+  try{openFolderStore('readwrite').then(opened=>{if(!opened)return;opened.store.delete('iv-reference:'+oldFlowId);opened.tx.oncomplete=()=>opened.db.close();});}catch(_){}
+  removeImageVideoUploads(imageVideoFlowId);
+  imageVideoFlowId='iv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+  imageVideoJobs.forEach(job=>{if(job.uploadPreviewUrl)URL.revokeObjectURL(job.uploadPreviewUrl);});
+  imageVideoJobs=[];$('ivImagePrompts').value='';$('ivVideoPrompts').value='';
+  $('ivSummary').textContent='Nhập hai danh sách prompt có cùng số dòng.';
+  $('ivImageFiles').value='';localStorage.removeItem(IMAGE_VIDEO_STORE);updateImageVideoModeUI();renderImageVideoJobs();
+}
+function updateImageVideoModeUI(){
+  const upload=$('ivImageMode').value==='upload';
+  $('ivImagePromptField').style.display=upload?'none':'';
+  $('ivUploadField').style.display=upload?'':'none';
+  $('ivCreateImages').style.display=upload?'none':'';
+  $('ivCreateImages').textContent='Tạo ảnh';
+  $('ivCreateImages').onclick=startImageVideoImages;
+  $('ivImageMode').disabled=imageVideoBusy||imageVideoJobs.length>0;
+}
+function changeImageVideoMode(){
+  if(imageVideoJobs.length){$('ivImageMode').value=imageVideoJobs[0].imageSource==='upload'?'upload':'generate';return toast('Hãy xóa danh sách hiện tại trước khi đổi nguồn ảnh.','warn');}
+  updateImageVideoModeUI();persistImageVideoFlow();
+}
+function updateImageVideoPromptList(){
+  if(imageVideoBusy)return;
+  try{
+    const videos=splitBatchPrompts($('ivVideoPrompts').value);
+    const upload=$('ivImageMode').value==='upload';
+    const images=upload?[]:splitBatchPrompts($('ivImagePrompts').value);
+    const count=Math.max(videos.length,images.length,upload?imageVideoJobs.length:0);
+    if(!count)throw new Error('Hãy nhập ít nhất một danh sách prompt.');
+    imageVideoJobs.slice(count).forEach(job=>{if(job.uploadPreviewUrl)URL.revokeObjectURL(job.uploadPreviewUrl);});
+    imageVideoJobs=Array.from({length:count},(_,index)=>{
+      const videoPrompt=videos[index]||'',imagePrompt=images[index]||'';
+      const old=imageVideoJobs[index];
+      if(!old)return upload
+        ?{imagePrompt:'',videoPrompt,imageSource:'upload',imageStatus:'Chưa có ảnh',videoStatus:videoPrompt?'Chưa tạo':'Chưa có prompt',imageUrl:'',videoUrl:'',error:''}
+        :{imagePrompt,videoPrompt,imageSource:'generated',imageStatus:imagePrompt?'Chưa tạo':'Chưa có prompt',videoStatus:videoPrompt?'Chưa tạo':'Chưa có prompt',imageUrl:'',videoUrl:'',error:''};
+      const next={...old,videoPrompt};
+      if(!upload&&old.imagePrompt!==imagePrompt){
+        next.imagePrompt=imagePrompt;next.imageStatus=imagePrompt?'Chưa tạo':'Chưa có prompt';next.videoStatus=videoPrompt?'Chưa tạo':'Chưa có prompt';
+        next.imageUrl='';next.videoUrl='';delete next.imageTaskId;delete next.videoTaskId;
+        delete next.imageMuseUrl;delete next.imageMuseThreadUrl;delete next.videoMuseThreadUrl;
+        if(next.imagePreviewUrl){URL.revokeObjectURL(next.imagePreviewUrl);delete next.imagePreviewUrl;}
+      }else if(!videoPrompt){
+        next.videoStatus='Chưa có prompt';next.videoUrl='';delete next.videoTaskId;delete next.videoMuseThreadUrl;
+      }
+      if(upload){
+        if(videoPrompt&&old.videoPrompt!==videoPrompt){next.videoStatus='Chưa tạo';next.videoUrl='';delete next.videoTaskId;delete next.videoMuseThreadUrl;}
+      }else if(videoPrompt&&old.videoPrompt!==videoPrompt){
+        next.videoStatus='Chưa tạo';next.videoUrl='';delete next.videoTaskId;delete next.videoMuseThreadUrl;
+      }
+      return next;
+    });
+    renderImageVideoJobs();
+    updateImageVideoModeUI();
+    $('ivSummary').textContent=`Đã cập nhật ${imageVideoJobs.length} cảnh theo danh sách prompt mới. Ảnh upload được giữ theo STT còn tồn tại.`;
+    toast('Đã cập nhật danh sách '+imageVideoJobs.length+' cảnh.','ok');
+  }catch(error){toast(error.message,'warn');}
+}
+function loadImageVideoPrompts(){
+  if(imageVideoBusy)return;
+  const prompts=splitBatchPrompts($('ivVideoPrompts').value);
+  const upload=$('ivImageMode').value==='upload';
+  const imagePrompts=upload?[]:splitBatchPrompts($('ivImagePrompts').value);
+  const count=Math.max(imageVideoJobs.length,prompts.length,imagePrompts.length);
+  if(!count){renderImageVideoJobs();return toast('Danh sách prompt video đang trống.','warn');}
+  imageVideoJobs.slice(count).forEach(job=>{if(job.uploadPreviewUrl)URL.revokeObjectURL(job.uploadPreviewUrl);});
+  imageVideoJobs=Array.from({length:count},(_,index)=>{
+    const old=imageVideoJobs[index];
+    const videoPrompt=prompts[index]||'';
+    if(!old)return upload
+      ?{imagePrompt:'',videoPrompt,imageSource:'upload',imageStatus:'Chưa có ảnh',videoStatus:videoPrompt?'Chưa tạo':'Chưa có prompt',imageUrl:'',videoUrl:'',error:''}
+      :{imagePrompt:imagePrompts[index]||'',videoPrompt,imageSource:'generated',imageStatus:imagePrompts[index]?'Chưa tạo':'Chưa có prompt',videoStatus:videoPrompt?'Chưa tạo':'Chưa có prompt',imageUrl:'',videoUrl:'',error:''};
+    const next={...old,videoPrompt};
+    if(old.videoPrompt!==videoPrompt){
+      next.videoStatus=videoPrompt?'Chưa tạo':'Chưa có prompt';next.videoUrl='';delete next.videoTaskId;delete next.videoMuseThreadUrl;
+    }
+    return next;
+  });
+  renderImageVideoJobs();
+  updateImageVideoModeUI();
+  $('ivSummary').textContent=`Đã nạp prompt video cho ${imageVideoJobs.length} cảnh; cảnh không có prompt được để trống.`;
+  toast('Đã nạp prompt video theo thứ tự cảnh.','ok');
+}
+async function prepareUploadedImageVideoJobs(){
+  const files=Array.from($('ivImageFiles').files||[]);
+  if(!files.length)throw new Error('Hãy chọn danh sách ảnh mới.');
+  const videoPrompts=splitBatchPrompts($('ivVideoPrompts').value);
+  const count=Math.max(files.length,videoPrompts.length);
+  for(const file of files){
+    if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024)
+      throw new Error(`Ảnh ${file.name} phải là PNG/JPG/WebP và tối đa 10 MB.`);
+  }
+  const opened=await openFolderStore('readwrite');
+  if(!opened)throw new Error('Trình duyệt không hỗ trợ lưu ảnh upload.');
+  const prefix='iv-upload:'+imageVideoFlowId+':',nextJobs=Array.from({length:count},(_,i)=>({imagePrompt:'',videoPrompt:videoPrompts[i]||'',imageSource:'upload',imageStatus:'Chưa có ảnh',videoStatus:videoPrompts[i]?'Chưa tạo':'Chưa có prompt',imageUrl:'',videoUrl:'',error:''}));
+  try{
+    for(let i=0;i<files.length;i++){
+      const file=files[i],number=i+1,key=prefix+String(number).padStart(3,'0');
+      opened.store.put(file,key);
+      nextJobs[i]={imagePrompt:`\u1ea2nh t\u1ea3i l\u00ean: ${file.name}`,videoPrompt:videoPrompts[i]||'',
+        imageSource:'upload',uploadKey:key,uploadName:file.name,uploadPreviewUrl:URL.createObjectURL(file),
+        imageStatus:'Ho\u00e0n th\u00e0nh',videoStatus:videoPrompts[i]?'Ch\u01b0a t\u1ea1o':'Ch\u01b0a c\u00f3 prompt',imageUrl:'',videoUrl:'',error:''};
+    }
+    const keep=new Set(nextJobs.map(job=>job.uploadKey));
+    const keysRequest=opened.store.getAllKeys();
+    keysRequest.onsuccess=()=>keysRequest.result
+      .filter(key=>String(key).startsWith(prefix)&&!keep.has(key))
+      .forEach(key=>opened.store.delete(key));
+    await new Promise((resolve,reject)=>{
+      opened.tx.oncomplete=resolve;
+      opened.tx.onerror=()=>reject(opened.tx.error||new Error('Không lưu được ảnh upload.'));
+      opened.tx.onabort=()=>reject(opened.tx.error||new Error('Không lưu được ảnh upload.'));
+    });
+  }finally{opened.db.close();}
+  imageVideoJobs.forEach(job=>{if(job.uploadPreviewUrl)URL.revokeObjectURL(job.uploadPreviewUrl);});
+  imageVideoJobs=nextJobs;renderImageVideoJobs();
+  $('ivSummary').textContent=`Đã tạo ${nextJobs.length} cảnh theo danh sách dài hơn; dữ liệu thiếu được để trống.`;
+  updateImageVideoModeUI();$('ivImageFiles').value='';
+}
+async function imageVideoCreateTask(stage,job){
+  const video=stage==='video', endpoint=video?'/v1/videos':'/v1/images/tasks';
+  const body={prompt:video?job.videoPrompt:job.imagePrompt,size:$('ivSize').value,timeout:600};
+  if(!video&&imageVideoImageReferenceName){
+    const blob=await readImageVideoUpload('iv-reference:'+imageVideoFlowId);
+    if(!blob)throw new Error('Không tìm thấy ảnh tham chiếu đã lưu. Hãy chọn lại ảnh.');
+    body.reference_image=await imageVideoNormalizeBlob(blob);
+  }
+  if(video){
+    if(job.imageSource!=='upload'&&!job.imageAccountId)throw new Error('Không có ID tài khoản đã tạo ảnh. Hãy tạo lại ảnh để ghim đúng tài khoản cho video.');
+    body.duration=8;if(job.imageAccountId)body.account_id=job.imageAccountId;body.reference_image=await imageVideoReference(job);
+  }
+  for(let attempt=0;;attempt++){
+    try{return await api(endpoint,{method:'POST',body:JSON.stringify(body)});}
+    catch(error){if(error.status===429&&attempt<12){await batchSleep(5000);continue;}throw error;}
+  }
+}
+async function imageVideoReference(job){
+  if(job.imageSource==='upload'){
+    const blob=await readImageVideoUpload(job.uploadKey);
+    if(!blob)throw new Error('Không tìm thấy ảnh upload đã lưu. Hãy nạp ảnh lại.');
+    return imageVideoNormalizeBlob(blob);
+  }
+  const museUrl=String(job.imageMuseUrl||'');
+  if(/^https?:\/\//i.test(museUrl))return museUrl;
+  return imageVideoReferenceData(job.imageUrl);
+}
+async function imageVideoReferenceData(url){
+  const safeUrl=safeBatchMediaUrl(url);
+  if(!safeUrl)throw new Error('Không tìm thấy ảnh tham chiếu hợp lệ.');
+  const headers={};
+  if(KEY)headers.Authorization='Bearer '+KEY;
+  const response=await fetch(safeUrl,{headers,credentials:'same-origin'});
+  if(!response.ok)throw new Error(`Không tải được ảnh tham chiếu (HTTP ${response.status}).`);
+  const blob=await response.blob();
+  if(!/^image\/(png|jpeg|webp)$/i.test(blob.type||''))throw new Error('Ảnh tham chiếu phải là PNG, JPG hoặc WebP.');
+  return imageVideoNormalizeBlob(blob);
+}
+async function imageVideoNormalizeBlob(blob){
+  // Muse's uploader is more reliable with a compact JPEG than a full-size
+  // generated WebP; keep the aspect ratio and cap the payload sent to CDP.
+  const bitmap=await createImageBitmap(blob);
+  const scale=Math.min(1,1536/Math.max(bitmap.width,bitmap.height));
+  const canvas=document.createElement('canvas');
+  canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+  canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+  canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);
+  bitmap.close();
+  const compact=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('Không chuyển đổi được ảnh tham chiếu.')),'image/jpeg',0.86));
+  return await new Promise((resolve,reject)=>{
+    const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Không đọc được ảnh tham chiếu.'));reader.readAsDataURL(compact);
+  });
+}
+async function imageVideoWaitForResult(stage,job){
+  const video=stage==='video', endpoint=video?'/v1/videos/':'/v1/images/tasks/';
+  const taskKey=stage+'TaskId';
+  let result,failures=0;
+  if(job.resumeTask){
+    result=await api(endpoint+encodeURIComponent(job[taskKey]));
+    delete job.resumeTask;
+  }else{
+    result=await imageVideoCreateTask(stage,job);
+    job[taskKey]=result.id||result.task_id;
+    if(!job[taskKey]) throw new Error('Máy chủ không trả về mã tác vụ.');
+    persistImageVideoFlow();
+  }
+  const deadline=Date.now()+20*60*1000;
+  while(Date.now()<deadline){
+    const accountLabel=result.account_label||result.account||'';
+    if(accountLabel)job[video?'videoAccountLabel':'imageAccountLabel']=accountLabel;
+    const accountId=result.account||result.account_id||'';
+    if(accountId)job[video?'videoAccountId':'imageAccountId']=accountId;
+    const threadUrl=safeMuseThreadUrl(result.muse_url);
+    if(threadUrl)job[video?'videoMuseThreadUrl':'imageMuseThreadUrl']=threadUrl;
+    persistImageVideoFlow();
+    if(['completed','succeeded'].includes(result.status)){
+      const media=(result.data&&result.data[0])||result.result||result.video||result;
+      const url=media.url||result.url||'';
+      if(!safeBatchMediaUrl(url)) throw new Error('Tác vụ xong nhưng không có liên kết kết quả hợp lệ.');
+      return {url,museUrl:media.muse_media_url||media.source_url||'',threadUrl:threadUrl||''};
+    }
+    if(['failed','cancelled'].includes(result.status)) throw new Error(result.error||'Tạo nội dung thất bại.');
+    await batchSleep(video?4000:3000);
+    try{result=await api(endpoint+encodeURIComponent(job[taskKey]));failures=0;}
+    catch(error){if(++failures>=6||error.status===401||error.status===404)throw new Error('Không đọc được trạng thái tác vụ: '+error.message);}
+  }
+  throw new Error('Đã chờ quá 20 phút.');
+}
+async function runImageVideoJobs(stage,jobs,{resume=false}={}){
+  if(imageVideoBusy||!jobs.length)return;
+  imageVideoPauseRequested=false;
+  imageVideoSetBusy(true,stage);
+  const run={stage,jobs,resume,next:0,completed:0,desired:1,active:new Map(),resolve:null,finished:null};
+  run.finished=new Promise(resolve=>{run.resolve=resolve;});
+  imageVideoRun=run;
+  try{
+    imageVideoEnsureWorkers(run);
+    await run.finished;
+    if(imageVideoPauseRequested)$('ivSummary').textContent=`Đã tạm dừng sau ${run.completed}/${jobs.length} tác vụ của lượt này. Các tác vụ đang chạy đã kết thúc; bạn có thể sửa danh sách.`;
+  }finally{imageVideoRun=null;imageVideoSetBusy(false,stage);imageVideoPauseRequested=false;}
+}
+function imageVideoEnsureWorkers(run){
+  run.desired=Math.max(1,Math.min(10,Number($('ivWorkers').value)||1,run.jobs.length));
+  if(imageVideoPauseRequested){if(!run.active.size)run.resolve();return;}
+  for(let slot=0;slot<run.desired;slot++){
+    if(run.next>=run.jobs.length)break;
+    if(run.active.has(slot))continue;
+    const promise=(async()=>{
+      try{
+        while(!imageVideoPauseRequested&&slot<run.desired&&run.next<run.jobs.length){
+          while(!imageVideoPauseRequested&&slot<run.desired&&run.active.size>run.desired)await batchSleep(200);
+          if(imageVideoPauseRequested||slot>=run.desired)break;
+          const job=run.jobs[run.next++];
+          job.resumeTask=run.resume;
+          job.error='';job[run.stage+'Status']='Đang xử lý';renderImageVideoJobs();
+          try{
+            const output=await imageVideoWaitForResult(run.stage,job);
+            if(run.stage==='image'){
+              job.imageUrl=output.url;job.imageMuseUrl=output.museUrl;job.imageMuseThreadUrl=output.threadUrl;job.imageStatus='Hoàn thành';job.videoUrl='';job.videoStatus='Chưa tạo';
+            }else{job.videoUrl=output.url;job.videoStatus='Hoàn thành';}
+            run.completed++;
+          }catch(error){job[run.stage+'Status']='Lỗi';job.error=error.message;}
+          $('ivSummary').textContent=`Đã xử lý ${run.completed}/${run.jobs.length} tác vụ ${run.stage==='image'?'ảnh':'video'} trong lượt này.`;
+          renderImageVideoJobs();loadTasks();loadMedia();
+        }
+      }finally{
+        run.active.delete(slot);
+        if(!imageVideoPauseRequested&&run.next<run.jobs.length)imageVideoEnsureWorkers(run);
+        if(!run.active.size&&(imageVideoPauseRequested||run.next>=run.jobs.length))run.resolve();
+      }
+    })();
+    run.active.set(slot,promise);
+  }
+  if(!run.active.size&&(imageVideoPauseRequested||run.next>=run.jobs.length))run.resolve();
+}
+async function startImageVideoImages(){
+  if(imageVideoImageReferenceLoading)return toast('Đang lưu ảnh tham chiếu, hãy chờ một chút.','warn');
+  if($('ivImageMode').value==='upload'){
+    try{await prepareUploadedImageVideoJobs();}
+    catch(error){$('ivImageFiles').value='';toast(error.message,'warn');}
+    return;
+  }
+  try{prepareImageVideoJobs();imageVideoPromptLists();}
+  catch(error){return toast(error.message,'warn');}
+  const pending=imageVideoJobs.filter(job=>job.imagePrompt.trim()&&job.imageStatus!=='Hoàn thành');
+  if(!pending.length)return toast(imageVideoJobs.some(job=>job.imagePrompt.trim())?'Tất cả ảnh có prompt đã tạo xong.':'Danh sách không có prompt tạo ảnh; các ô được để trống.','ok');
+  await runImageVideoJobs('image',pending);
+}
+async function startImageVideoVideos(){
+  if(!imageVideoJobs.length)return toast('Hãy tạo ảnh trước.','warn');
+  const eligible=imageVideoJobs.filter(job=>job.videoPrompt.trim());
+  if(!eligible.length)return toast('Chưa có cảnh nào có prompt video.','warn');
+  const pending=eligible.filter(job=>job.imageStatus==='Hoàn thành'&&job.videoStatus!=='Hoàn thành');
+  if(!pending.length)return toast('Chưa có cảnh nào vừa có ảnh hoàn thành vừa có prompt video.','warn');
+  await runImageVideoJobs('video',pending);
+}
+function editImageVideoImagePrompt(index){imageVideoJobs[index].editingImagePrompt=true;renderImageVideoJobs();}
+function cancelImageVideoImagePrompt(index){delete imageVideoJobs[index].editingImagePrompt;renderImageVideoJobs();}
+function saveImageVideoImagePrompt(index){
+  const job=imageVideoJobs[index],value=String($('iv-image-prompt-'+index).value||'').trim();
+  if(!value)return toast('Prompt ảnh không được để trống.','warn');
+  if(job.uploadPreviewUrl)URL.revokeObjectURL(job.uploadPreviewUrl);
+  job.imagePrompt=value;job.imageSource='generated';job.imageUrl='';job.imageStatus='Chưa tạo';job.videoUrl='';job.videoStatus='Chưa tạo';job.error='';delete job.editingImagePrompt;renderImageVideoJobs();
+}
+function editImageVideoVideoPrompt(index){imageVideoJobs[index].editingVideoPrompt=true;renderImageVideoJobs();}
+function cancelImageVideoVideoPrompt(index){delete imageVideoJobs[index].editingVideoPrompt;renderImageVideoJobs();}
+function saveImageVideoVideoPrompt(index){
+  const job=imageVideoJobs[index],value=String($('iv-video-prompt-'+index).value||'').trim();
+  if(!value)return toast('Prompt video không được để trống.','warn');
+  job.videoPrompt=value;job.videoUrl='';job.videoStatus='Chưa tạo';job.error='';delete job.editingVideoPrompt;renderImageVideoJobs();
+}
+async function retryImageVideoImage(index){
+  if(imageVideoBusy)return;
+  if(!imageVideoJobs[index])return;
+  if(!imageVideoJobs[index].imagePrompt.trim())return toast('Cảnh này chưa có prompt tạo ảnh.','warn');
+  await runImageVideoJobs('image',[imageVideoJobs[index]]);
+}
+async function retryImageVideoVideo(index){
+  if(imageVideoBusy)return;
+  if(!imageVideoJobs[index]||imageVideoJobs[index].imageStatus!=='Hoàn thành')return;
+  await runImageVideoJobs('video',[imageVideoJobs[index]]);
+}
+function openImageVideoVideo(index){
+  const url=safeBatchMediaUrl(imageVideoJobs[index]&&imageVideoJobs[index].videoUrl);
+  if(!url)return toast('Chưa có video để mở.','warn');
+  window.open(url,'_blank','noopener');
+}
+async function resumeImageVideoTasks(){
+  // Use the canonical job objects so the resumed task updates persisted state.
+  const resumeImages=imageVideoJobs.filter(job=>job.imageStatus==='Đang xử lý'&&job.imageTaskId);
+  const resumeVideos=imageVideoJobs.filter(job=>job.videoStatus==='Đang xử lý'&&job.videoTaskId);
+  if(resumeImages.length)await runImageVideoJobs('image',resumeImages,{resume:true});
+  if(resumeVideos.length)await runImageVideoJobs('video',resumeVideos,{resume:true});
+}
+
 restoreBatchHistory();
-['batchSize','batchDuration','batchConcurrency'].forEach(id => {
+restoreImageVideoFlow().then(()=>resumeImageVideoTasks())
+  .catch(error=>console.warn('Image-to-video resume failed:',error));
+try {
+  const savedTab=localStorage.getItem('muse2api_active_tab_v1');
+  if(savedTab&&document.querySelector(`nav.tabs button[data-t="${savedTab}"]`))goTab(savedTab);
+} catch (_) {}
+setTimeout(()=>resumeVideoAssembly().catch(error=>console.warn('Video assembly resume failed:',error)),400);
+['batchSize','batchDuration'].forEach(id => {
   $(id).onchange = saveBatchSettings;
 });
+$('batchConcurrency').onchange = async () => {
+  const select = $('batchConcurrency');
+  const requested = Number(select.value);
+  select.disabled = true;
+  try {
+    const result = await api('/admin/config/concurrency', {
+      method: 'PATCH', body: JSON.stringify({max_concurrency: requested})
+    });
+    applyBatchServerLimits({
+      max_concurrency: result.max_concurrency,
+      per_account_concurrency: batchServerLimits.perAccount
+    });
+    if (activeBatch && activeBatch.running && activeBatch.setConcurrency) {
+      activeBatch.setConcurrency(result.max_concurrency);
+    }
+    saveBatchSettings();
+    toast(`Đã đặt tối đa ${result.max_concurrency} tác vụ đồng thời.`);
+  } catch (error) {
+    select.value = String(batchServerLimits.total);
+    toast('Không lưu được giới hạn tác vụ: ' + uiText(error.message), 'bad');
+  } finally {
+    select.disabled = false;
+  }
+};
 restoreBatchFolder();
 refreshRecoveredBatchJobs();
 setInterval(() => {
@@ -3304,11 +4531,9 @@ setInterval(() => {
 }, 4000);
 refreshAll();
 setInterval(() => {
-  loadStatus(); loadPool();
   if ($('tab-tasks').classList.contains('active')) loadTasks();
 }, 8000);
 setInterval(() => {
-  loadRepoStatus(false);
 }, 60000);
 </script>
 </body>

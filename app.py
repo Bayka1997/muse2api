@@ -27,24 +27,31 @@ from typing import Any
 
 import asyncio
 import base64
+import copy
+from concurrent.futures import ThreadPoolExecutor
 import io
 import hashlib
 import json
 import logging
 import os
 import re
+import shutil
+import socket
+import tempfile
 import threading
 import time
 import uuid
 import zipfile
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile, File
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 from pydantic import BaseModel, Field
 
 from config import CFG
-from engine import ESSENTIAL_COOKIES, MuseAuthError, MuseEngine, MuseGenerationError, file_is_page_clip
+from engine import (ESSENTIAL_COOKIES, MuseAuthError,
+                    MuseEngine, MuseGenerationError, file_is_page_clip,
+                    missing_essential_cookies)
 from store import Store, account_expiry, min_expiry
 
 import sys
@@ -56,7 +63,51 @@ if not log.handlers:
     log.addHandler(_h)
 
 CFG.ensure_dirs()
+# Keep multipart upload spools and processing scratch files beside the app data.
+# The default Windows TEMP drive may be much smaller than the project's data drive.
+tempfile.tempdir = CFG.data_dir
 app = FastAPI(title="muse2api", version="1.5.4")
+_ASSEMBLY_DOWNLOAD_LOCK = threading.Lock()
+_ASSEMBLY_DOWNLOADS: dict[str, tuple[str, float]] = {}
+_ASSEMBLY_JOBS: dict[str, dict] = {}
+
+
+def _assembly_state_path(kind: str, key: str) -> str | None:
+    """Shared, atomic state files keep assembly jobs visible across workers."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", str(key or "")):
+        return None
+    directory = os.path.join(CFG.data_dir, "video-assembly-state", kind)
+    os.makedirs(directory, exist_ok=True)
+    return os.path.join(directory, f"{key}.json")
+
+
+def _write_assembly_state(kind: str, key: str, value: dict) -> None:
+    path = _assembly_state_path(kind, key)
+    if not path:
+        return
+    temp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+
+
+def _read_assembly_state(kind: str, key: str) -> dict | None:
+    path = _assembly_state_path(kind, key)
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
 
 # Cookie 助手脚本从 muse.ai 页面发起导入请求，需要放行该来源；
 # 浏览器扩展从 chrome-extension:// 发起，也一并放行。
@@ -83,32 +134,55 @@ class ConcurrencyLock:
     由 CFG.max_concurrency 限制最大并发槽位；
     同时提供与标准 Lock 兼容的 acquire / release / locked 接口，
     确保向下兼容历史单锁断言与管理端操作。"""
-    def __init__(self, limit: int = 2):
+    def __init__(self, limit: int = 2, stop_when_idle: bool = False):
         self.limit = max(1, limit)
-        self._sem = threading.Semaphore(self.limit)
-        self._count_lock = threading.Lock()
+        self.stop_when_idle = stop_when_idle
+        self._cond = threading.Condition()
         self._active_count = 0
+        self._stopping = False
+
+    def set_limit(self, limit: int):
+        with self._cond:
+            self.limit = max(1, int(limit))
+            self._cond.notify_all()
 
     def acquire(self, blocking: bool = True, timeout: float | None = -1) -> bool:
         if timeout is None:
             timeout = -1
-        if timeout < 0:
-            ok = self._sem.acquire(blocking=blocking)
-        else:
-            ok = self._sem.acquire(blocking=blocking, timeout=timeout)
-        if ok:
-            with self._count_lock:
-                self._active_count += 1
-        return ok
+        deadline = None if timeout < 0 else time.monotonic() + timeout
+        with self._cond:
+            while self._active_count >= self.limit or self._stopping:
+                if not blocking:
+                    return False
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return False
+                self._cond.wait(remaining)
+            self._active_count += 1
+            return True
 
     def release(self):
-        with self._count_lock:
+        with self._cond:
             if self._active_count > 0:
                 self._active_count -= 1
-        self._sem.release()
+            stop = self.stop_when_idle and self._active_count == 0
+            if stop:
+                self._stopping = True
+            else:
+                self._cond.notify_all()
+        try:
+            if stop:
+                engine.stop()
+        except Exception:
+            log.warning("Failed to stop idle Chromium", exc_info=True)
+        finally:
+            if stop:
+                with self._cond:
+                    self._stopping = False
+                    self._cond.notify_all()
 
     def locked(self) -> bool:
-        with self._count_lock:
+        with self._cond:
             return self._active_count > 0
 
     def __enter__(self):
@@ -135,6 +209,9 @@ class AccountPoolManager:
         return self.busy_counts.get(account_id, 0)
 
     def _live(self) -> list[dict]:
+        refs = getattr(self.store, "list_usable_account_refs", None)
+        if refs:
+            return refs()
         return [a for a in self.store.accounts if a.get("enabled", True) and a.get("cookies")]
 
     def _take(self, account_id: str):
@@ -152,7 +229,8 @@ class AccountPoolManager:
 
     def acquire(self, account_id: str | None = None, preferred_id: str | None = None,
                 rotate: bool = True, force_rotate: bool = False,
-                timeout: float = 60.0, record_use: bool = True) -> dict:
+                timeout: float = 60.0, record_use: bool = True,
+                allow_overflow: bool = False) -> dict:
         del rotate  # Việc chia đều dựa trên số video đang chạy, không dồn vào một cookie.
         deadline = time.monotonic() + timeout
         with self.cond:
@@ -168,7 +246,10 @@ class AccountPoolManager:
                     acc = self.store.get_account(account_id)
                     if not acc or not acc.get("enabled", True):
                         raise MuseAuthError(f"指定账号 {account_id} 不存在或已禁用")
-                    if self._slots(account_id) < self.per_account:
+                    missing = missing_essential_cookies(acc.get("cookies") or {})
+                    if missing:
+                        raise MuseAuthError("Selected account is missing essential cookies: " + ", ".join(missing))
+                    if self._slots(account_id) < self.per_account or allow_overflow:
                         self._take(account_id)
                         return acc
                 else:
@@ -183,6 +264,11 @@ class AccountPoolManager:
                             return acc
 
                 if not self._live():
+                    invalid = [a for a in self.store.list_accounts()
+                               if a.get("enabled", True) and a.get("cookie_count")
+                               and not a.get("essential_ok")]
+                    if invalid:
+                        raise MuseAuthError("Enabled accounts are missing essential cookies; re-import complete cookies")
                     raise MuseAuthError("没有可用账号，请先在管理页面导入 cookie")
 
                 self.cond.wait(timeout=min(remaining, 0.5))
@@ -199,10 +285,34 @@ class AccountPoolManager:
             self.cond.notify_all()
 
 
-GEN_LOCK = ConcurrencyLock(limit=CFG.max_concurrency)
+GEN_LOCK = ConcurrencyLock(limit=CFG.max_concurrency, stop_when_idle=True)
 ACCOUNT_POOL = AccountPoolManager(store, per_account=CFG.per_account_concurrency)
 IMAGE_TASK_LOCK = threading.Lock()
+TASK_EXECUTOR = ThreadPoolExecutor(max_workers=10,
+                                   thread_name_prefix="muse-task")
+TASK_CANCEL_EVENTS: dict[str, threading.Event] = {}
+TASK_CANCEL_LOCK = threading.RLock()
+CHAT_STREAM_LIMIT = threading.BoundedSemaphore(20)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MAX_CONCURRENCY = 10
+
+
+def _register_task_cancel(tid: str) -> threading.Event:
+    event = threading.Event()
+    with TASK_CANCEL_LOCK:
+        TASK_CANCEL_EVENTS[tid] = event
+    return event
+
+
+def _forget_task_cancel(tid: str):
+    with TASK_CANCEL_LOCK:
+        TASK_CANCEL_EVENTS.pop(tid, None)
+
+
+def _task_cancel_requested(tid: str) -> bool:
+    with TASK_CANCEL_LOCK:
+        event = TASK_CANCEL_EVENTS.get(tid)
+    return bool(event and event.is_set())
 
 
 # ------------------------- OpenAI 风格的错误响应 -------------------------
@@ -341,8 +451,19 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
     无论下游客户端何时断连、异常或超时，stop_event + finally 块保证 100% 立即释放 GEN_LOCK，绝不死锁。
     若首字前遇到单账号 VM 卡死或会话异常，自动切换下一个健康账号重试一次。"""
     import queue
-    q = queue.Queue(maxsize=100)
+    if not CHAT_STREAM_LIMIT.acquire(blocking=False):
+        raise MuseGenerationError("Quá nhiều luồng chat đang chờ; thử lại sau.")
+    q = queue.Queue(maxsize=16)
     stop_event = threading.Event()
+
+    def emit(item):
+        while not stop_event.is_set():
+            try:
+                q.put(item, timeout=0.25)
+                return True
+            except queue.Full:
+                continue
+        return False
 
     def worker():
         cur_id = account_id
@@ -391,7 +512,8 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                             account_id=cur_id, stop_event=stop_event
                         ):
                             yielded = True
-                            q.put(("data", chunk))
+                            if not emit(("data", chunk)):
+                                return
                             if stop_event.is_set():
                                 return
                     if cur_id:
@@ -414,12 +536,13 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                     if yielded:
                         break
             if last_exc is not None:
-                q.put(("error", last_exc))
+                emit(("error", last_exc))
         finally:
             if leased_id:
                 ACCOUNT_POOL.release(leased_id)
             engine.close_current_page()
-            q.put(("done", None))
+            emit(("done", None))
+            CHAT_STREAM_LIMIT.release()
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -518,6 +641,10 @@ class AccountRequest(BaseModel):
 class AccountPatch(BaseModel):
     label: str | None = None
     enabled: bool | None = None
+
+
+class AccountOrderRequest(BaseModel):
+    ids: list[str]
 
 
 # ------------------------- 提示词构造 -------------------------
@@ -882,12 +1009,23 @@ def _pos(v) -> bool:
 def _run_generation(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
                     reference_image: str | None = None,
-                    on_acquired=None, on_context=None, task_id=None) -> tuple[dict, str | None]:
+                    on_acquired=None, on_context=None, task_id=None,
+                    cancel_event: threading.Event | None = None,
+                    expected_duration: int = 10) -> tuple[dict, str | None]:
     # Browser ownership covers account selection, retry and cleanup, not just generate().
     # The generation clock starts after an account is free. Queue time must not consume it.
-    if not GEN_LOCK.acquire(timeout=max(1, timeout)):
-        raise MuseGenerationError("等待浏览器队列超时，请稍后重试")
+    lock_deadline = time.monotonic() + max(1, timeout)
+    while True:
+        if cancel_event and cancel_event.is_set():
+            raise MuseGenerationError("Task cancelled by user")
+        remaining = lock_deadline - time.monotonic()
+        if remaining <= 0:
+            raise MuseGenerationError("等待浏览器队列超时，请稍后重试")
+        if GEN_LOCK.acquire(timeout=min(0.25, remaining)):
+            break
     try:
+        if cancel_event and cancel_event.is_set():
+            raise MuseGenerationError("Task cancelled by user")
         if on_acquired:
             try:
                 on_acquired()
@@ -895,12 +1033,15 @@ def _run_generation(prompt: str, kind: str, timeout: int,
                 pass
         return _run_generation_locked(prompt, kind, timeout, account_id,
                                       on_progress, reference_image, deadline=None,
-                                      on_context=on_context, task_id=task_id)
+                                      on_context=on_context, task_id=task_id,
+                                      cancel_event=cancel_event,
+                                      expected_duration=expected_duration)
     finally:
         if task_id:
             views = getattr(engine, "task_views", None)
             if views:
-                views.finish(task_id)
+                # Free the isolated browser context as soon as generation ends.
+                views.forget(task_id)
             if getattr(engine, "_local", None):
                 engine._local.task_view_id = None
         GEN_LOCK.release()
@@ -908,20 +1049,38 @@ def _run_generation(prompt: str, kind: str, timeout: int,
 
 def _run_generation_locked(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
-                    reference_image: str | None = None, deadline=None, on_context=None, task_id=None) -> tuple[dict, str | None]:
+                    reference_image: str | None = None, deadline=None, on_context=None,
+                    task_id=None, cancel_event: threading.Event | None = None,
+                    expected_duration: int = 10) -> tuple[dict, str | None]:
     # Several batch rows can wait behind the few signed-in accounts. Give them
     # time for a few finished videos before failing, then give the winner a full generation budget.
     account_wait = max(1, timeout) * 4 if deadline is None else max(1, int(deadline - time.monotonic()))
     preferred_id = None if kind == "video" and not account_id else getattr(engine, "current_acc_id", None)
-    acc = ACCOUNT_POOL.acquire(account_id=account_id,
-                               preferred_id=preferred_id,
-                               timeout=account_wait)
+    account_deadline = time.monotonic() + account_wait
+    while True:
+        if cancel_event and cancel_event.is_set():
+            raise MuseGenerationError("Task cancelled by user")
+        account_remaining = account_deadline - time.monotonic()
+        if account_remaining <= 0:
+            raise MuseGenerationError("Account wait timed out")
+        try:
+            acc = ACCOUNT_POOL.acquire(account_id=account_id,
+                                       preferred_id=preferred_id,
+                                       timeout=min(0.5, account_remaining))
+            break
+        except MuseGenerationError:
+            if cancel_event and cancel_event.is_set():
+                raise MuseGenerationError("Task cancelled by user")
+            if time.monotonic() >= account_deadline:
+                raise
     if deadline is None:
         deadline = time.monotonic() + max(1, timeout)
     cur_acc = acc
     last_exc = None
     try:
         for attempt in range(2):
+            if cancel_event and cancel_event.is_set():
+                raise MuseGenerationError("Task cancelled by user")
             if deadline is not None and time.monotonic() >= deadline:
                 raise MuseGenerationError("任务总等待时限已到，停止重试")
             if attempt > 0:
@@ -934,12 +1093,18 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 rem = int(deadline - time.monotonic()) if deadline is not None else timeout
                 if rem <= 0:
                     break
-                alt = ACCOUNT_POOL.acquire(rotate=True, force_rotate=True, timeout=rem)
-                if not alt or (old_id and alt["id"] == old_id):
-                    if alt:
-                        cur_acc = alt
-                    break
-                cur_acc = alt
+                if account_id:
+                    # Explicit pinning for paired image-to-video jobs must survive retries.
+                    cur_acc = ACCOUNT_POOL.acquire(account_id=account_id, timeout=rem)
+                    if not cur_acc:
+                        break
+                else:
+                    alt = ACCOUNT_POOL.acquire(rotate=True, force_rotate=True, timeout=rem)
+                    if not alt or (old_id and alt["id"] == old_id):
+                        if alt:
+                            cur_acc = alt
+                        break
+                    cur_acc = alt
                 log.info("【生图/视频自动切号】切换到备用账号 %s (%s) 重试...", cur_acc.get("label"), cur_acc["id"])
             try:
                 refreshed = _renew_and_persist(cur_acc["id"], wake_vm=True, force=(attempt > 0))
@@ -972,10 +1137,12 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 if task_id:
                     engine._ensure_local().task_view_id = task_id
                 try:
+                    reference = reference_image() if callable(reference_image) else reference_image
                     res = engine.generate(cur_acc["cookies"], prompt, expect=kind,
                                           timeout=remaining, expires=cur_acc.get("cookies_exp"),
                                           account_id=cur_acc["id"], on_progress=report_progress,
-                                          reference_image=reference_image)
+                                          reference_image=reference, stop_event=cancel_event,
+                                          expected_duration=expected_duration)
                 finally:
                     # Save the conversation link before failure cleanup navigates away or closes the tab.
                     record_context()
@@ -987,6 +1154,8 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 store.mark(cur_acc["id"], False, str(exc))
                 engine.close_current_page()
             except MuseGenerationError as exc:
+                if cancel_event and cancel_event.is_set():
+                    raise MuseGenerationError("Task cancelled by user") from exc
                 last_exc = exc
                 if "MUSE_ACTION_REQUIRED:" in str(exc):
                     raise
@@ -1019,7 +1188,8 @@ def readyz():
     accs = [a for a in store.list_accounts() if a.get("enabled", True)]
     return {"status": "ready" if accs else "no_account",
             "accounts": len(accs),
-            "browser_running": bool(engine.proc and engine.proc.poll() is None)}
+            "browser_running": bool(engine.browser and
+                                    (engine.proc is None or engine.proc.poll() is None))}
 
 
 @app.get("/v1/models")
@@ -1031,6 +1201,9 @@ def models(_=Depends(auth)):
 def _image_response(req: ImageRequest, res: dict) -> dict:
     item = {"revised_prompt": req.prompt, "url": media_url(res["filename"]),
             "size": req.size or "auto", "kind": res["kind"], "bytes": res["size"]}
+    source_url = res.get("muse_media_url") or res.get("source_url")
+    if source_url:
+        item["muse_media_url"] = source_url
     if req.response_format == "b64_json":
         fpath = res.get("path") or os.path.join(CFG.media_dir, res["filename"])
         with open(fpath, "rb") as f:
@@ -1049,26 +1222,29 @@ def _queue_image(req: ImageRequest, prompt: str, reference_image: str | None,
         {"request": req.model_dump(by_alias=True), "reference": reference_image},
         sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     with IMAGE_TASK_LOCK:
-        tasks = list(store.tasks.values())
         if key_hash:
-            for existing in tasks:
-                if existing.get("image_request_key") == key_hash:
-                    if existing.get("image_request_hash") != request_hash:
-                        raise HTTPException(409, "Idempotency-Key reused with different request")
-                    return JSONResponse(status_code=202, content={
-                        "id": existing["id"], "task_id": existing["id"],
-                        "object": "image.task", "status": existing["status"],
-                        "progress": existing.get("progress", 0),
-                        "created_at": existing["created_at"]})
+            existing = store.find_task("image_request_key", key_hash)
+            if existing:
+                if existing.get("image_request_hash") != request_hash:
+                    raise HTTPException(409, "Idempotency-Key reused with different request")
+                return JSONResponse(status_code=202, content={
+                    "id": existing["id"], "task_id": existing["id"],
+                    "object": "image.task", "status": existing["status"],
+                    "progress": existing.get("progress", 0),
+                    "created_at": existing["created_at"]})
         # ponytail: one Chromium worker; cap admission instead of adding a broker.
-        if sum(t.get("kind") == "image" and t.get("status") in ("queued", "processing")
-               for t in tasks) >= 30:
-            raise HTTPException(429, "Image queue is full; retry later")
+        pending = store.count_tasks(statuses=("queued", "processing"))
+        if pending >= 30:
+            raise HTTPException(429, "Generation queue is full; retry later")
         task = store.create_task("image", req.prompt)
         tid = task["id"]
+        cancel_event = _register_task_cancel(tid)
         store.update_task(tid, api_prompt=prompt, size=req.size,
                           response_format=req.response_format, progress=0,
-                          image_request_key=key_hash, image_request_hash=request_hash)
+                          image_request_key=key_hash, image_request_hash=request_hash,
+                          timeout=req.timeout or CFG.image_timeout,
+                          requested_account_id=req.account_id or None)
+        store.set_task_input(tid, reference_image=reference_image)
 
     def worker():
         timing = {"t0": time.time()}
@@ -1076,24 +1252,35 @@ def _queue_image(req: ImageRequest, prompt: str, reference_image: str | None,
             timing["t0"] = time.time()
             store.update_task(tid, status="processing", progress=5)
         try:
+            task_data = store.get_task(tid) or {}
             res, acc_id = _run_generation(
-                prompt, "image", req.timeout or CFG.image_timeout,
-                account_id=req.account_id or None,
-                reference_image=reference_image,
+                task_data.get("api_prompt") or task_data.get("prompt") or "", "image",
+                task_data.get("timeout") or CFG.image_timeout,
+                account_id=task_data.get("requested_account_id"),
+                reference_image=lambda: store.get_task_input(tid).get("reference_image"),
                 on_progress=lambda p: store.update_task(tid, progress=p),
                 on_acquired=_on_acquired,
-                on_context=lambda context: store.update_task(tid, **context), task_id=tid)
+                on_context=lambda context: store.update_task(tid, **context), task_id=tid,
+                cancel_event=cancel_event)
+            if cancel_event.is_set():
+                store.update_task(tid, status="cancelled", error="Cancelled by user")
+                return
             # Store only media metadata, not large base64 payloads or reference credentials.
             store.update_task(tid, status="completed", progress=100, account=acc_id,
                               elapsed=round(time.time() - timing["t0"], 1),
                               url=media_url(res["filename"]),
                               result={**{k: res[k] for k in ("filename", "size", "kind")},
-                                      "url": media_url(res["filename"])})
+                                      "url": media_url(res["filename"]),
+                                      "muse_media_url": res.get("source_url", "")})
         except Exception as exc:  # noqa: BLE001
-            store.update_task(tid, status="failed", error=str(exc),
+            store.update_task(tid, status="cancelled" if cancel_event.is_set() else "failed",
+                              error="Cancelled by user" if cancel_event.is_set() else str(exc),
                               elapsed=round(time.time() - timing["t0"], 1))
+        finally:
+            store.delete_task_input(tid)
+            _forget_task_cancel(tid)
 
-    threading.Thread(target=worker, daemon=True).start()
+    TASK_EXECUTOR.submit(worker)
     return JSONResponse(status_code=202, content={
         "id": tid, "task_id": tid, "object": "image.task", "status": "queued",
         "progress": 0, "created_at": task["created_at"]})
@@ -1244,27 +1431,41 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
 
     prompt = build_video_prompt(req)
     timeout = req.timeout or CFG.video_timeout
-    task = store.create_task("video", req.prompt)
-    store.update_task(task["id"], api_prompt=prompt)
-
-    store.update_task(task["id"], progress=10)
+    with IMAGE_TASK_LOCK:
+        if store.count_tasks(statuses=("queued", "processing")) >= 30:
+            raise HTTPException(429, "Generation queue is full; retry later")
+        task = store.create_task("video", req.prompt)
+        tid = task["id"]
+        cancel_event = _register_task_cancel(tid)
+        store.update_task(tid, api_prompt=prompt, duration=req.duration or 6,
+                          timeout=timeout, requested_account_id=req.account_id or None)
+        store.update_task(tid, progress=10)
+        store.set_task_input(tid, reference_image=ref_img)
 
     def worker():
         timing = {"t0": time.time()}
         def _on_acquired():
             timing["t0"] = time.time()
-            store.update_task(task["id"], status="processing", progress=15,
+            store.update_task(tid, status="processing", progress=15,
                               processing_started_at=timing["t0"])
         try:
+            task_data = store.get_task(tid) or {}
             def prog_cb(p):
-                store.update_task(task["id"], progress=p)
-            res, acc_id = _run_generation(prompt, "video", timeout, account_id=req.account_id or None, on_progress=prog_cb,
-                                          reference_image=ref_img, on_acquired=_on_acquired,
-                                          on_context=lambda context: store.update_task(task["id"], **context), task_id=task["id"])
-            if _video_file_saved(task["id"]):
+                store.update_task(tid, progress=p)
+            res, acc_id = _run_generation(task_data.get("api_prompt") or task_data.get("prompt") or "",
+                                          "video", task_data.get("timeout") or CFG.video_timeout,
+                                          account_id=task_data.get("requested_account_id"), on_progress=prog_cb,
+                                          reference_image=lambda: store.get_task_input(tid).get("reference_image"), on_acquired=_on_acquired,
+                                          on_context=lambda context: store.update_task(tid, **context), task_id=tid,
+                                          cancel_event=cancel_event,
+                                          expected_duration=task_data.get("duration") or 6)
+            if cancel_event.is_set():
+                store.update_task(tid, status="cancelled", error="Cancelled by user")
+                return
+            if _video_file_saved(tid):
                 return
             vurl = media_url(res["filename"])
-            store.update_task(task["id"], status="completed", progress=100, account=acc_id,
+            store.update_task(tid, status="completed", progress=100, account=acc_id,
                               elapsed=round(time.time() - timing["t0"], 1),
                               url=vurl,
                               video={"url": vurl},
@@ -1272,12 +1473,15 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
                                       "filename": res["filename"],
                                       "bytes": res["size"], "kind": res["kind"]})
         except Exception as exc:  # noqa: BLE001
-            if _video_file_saved(task["id"]):
+            if _video_file_saved(tid):
                 return
-            store.update_task(task["id"], status="failed",
+            store.update_task(tid, status="cancelled" if cancel_event.is_set() else "failed",
                               elapsed=round(time.time() - timing["t0"], 1), error=str(exc))
+        finally:
+            store.delete_task_input(tid)
+            _forget_task_cancel(tid)
 
-    threading.Thread(target=worker, daemon=True).start()
+    TASK_EXECUTOR.submit(worker)
     return {"id": task["id"], "task_id": task["id"], "object": "video.task", "status": "queued",
             "progress": 10, "created_at": task["created_at"]}
 
@@ -1371,7 +1575,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
     请求带 `tools` 时，会注入【工具调用协议】并把模型输出的 JSON 解析回
     `tool_calls`（muse.ai 没有原生 function calling，这层属于协议适配）。
 
-    对话与生图/生视频共用同一个浏览器实例，靠 `GEN_LOCK` 串行。
+    对话与生图/生视频共用同一个 Chromium 进程；并发任务使用独立 BrowserContext 与页面。
     """
     prompt = build_chat_prompt(req.messages) or (req.prompt or "").strip()
     if not prompt:
@@ -1632,6 +1836,365 @@ def get_media(name: str, download: bool = False):
     return FileResponse(p, filename=name if download else None)
 
 
+def _ffmpeg_executable() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        raise HTTPException(500, f"Không tìm thấy FFmpeg: {exc}")
+
+
+def _ffmpeg_duration(ffmpeg: str, path: str) -> float:
+    import subprocess
+    result = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
+    if not match:
+        raise ValueError(f"Không đọc được thời lượng audio: {os.path.basename(path)}")
+    return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+
+
+@app.post("/admin/video-assembly")
+def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
+                   mode: str = Form("segments"), _=Depends(auth)):
+    """Nhận một thư mục dự án, chia thời lượng audio cho các cảnh con và ghép thành MP4."""
+    import csv
+    import subprocess
+    from pathlib import PurePosixPath
+
+    if len(files) > 1000:
+        raise HTTPException(413, "Thư mục có quá nhiều file (tối đa 1000).")
+    work = None
+    final_path = None
+    assembled = False
+    with _ASSEMBLY_DOWNLOAD_LOCK:
+        _ASSEMBLY_JOBS[job_id] = {"status": "processing", "progress": 1, "stage": "upload", "started_at": time.time()}
+        _write_assembly_state("jobs", job_id, _ASSEMBLY_JOBS[job_id])
+    def update_job(**values):
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            current = _ASSEMBLY_JOBS.setdefault(job_id, {"status": "processing", "started_at": time.time()})
+            current.update(values)
+            _write_assembly_state("jobs", job_id, current)
+    try:
+        work = tempfile.mkdtemp(prefix="muse-assembly-", dir=CFG.data_dir)
+        for upload in files:
+            rel = PurePosixPath((upload.filename or "").replace("\\", "/"))
+            if rel.is_absolute() or ".." in rel.parts:
+                continue
+            target = os.path.join(work, *rel.parts)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as out:
+                shutil.copyfileobj(upload.file, out)
+            upload.file.close()
+        audio_dir = next((os.path.join(root, d) for root, dirs, _ in os.walk(work)
+                          for d in dirs if d.lower() == "audio"), None)
+        video_dir = next((os.path.join(root, d) for root, dirs, _ in os.walk(work)
+                          for d in dirs if d.lower() == "video"), None)
+        timeline_path = next((os.path.join(root, name) for root, _, names in os.walk(work)
+                              for name in names if name.lower() == "timeline.csv"), None)
+        if not audio_dir or not video_dir or not timeline_path:
+            raise HTTPException(400, "Cần chọn folder chứa timeline.csv, audio/ và video/.")
+        with open(timeline_path, "rb") as f:
+            timeline_bytes = f.read()
+        if timeline_bytes.startswith((b"\xff\xfe", b"\xfe\xff")):
+            timeline_text = timeline_bytes.decode("utf-16")
+        else:
+            try:
+                timeline_text = timeline_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                # Excel on Windows may save CSV files in the local ANSI code page.
+                timeline_text = timeline_bytes.decode("cp1252", errors="replace")
+        rows = list(csv.DictReader(io.StringIO(timeline_text, newline="")))
+        if mode not in {"segments", "prompt_timeline"}:
+            raise HTTPException(400, "Kiểu ghép video không hợp lệ.")
+        if not rows:
+            raise HTTPException(400, "timeline.csv không có dòng dữ liệu.")
+        # A prompt timeline is self describing. Auto-detect it so clients running
+        # an older admin page (or omitting the mode form field) still use the
+        # per-prompt audio timing columns instead of the legacy segment schema.
+        timeline_columns = set(rows[0])
+        prompt_timing_columns = {"audio_start_sec", "audio_end_sec", "display_duration_sec"}
+        if prompt_timing_columns.issubset(timeline_columns):
+            mode = "prompt_timeline"
+        if mode == "prompt_timeline":
+            required = {"audio_start_sec", "audio_end_sec", "display_duration_sec"}
+            if not required.issubset(timeline_columns) or not ({"video_file", "source_file"} & timeline_columns):
+                raise HTTPException(400, "Timeline mới cần audio_start_sec, audio_end_sec, display_duration_sec và video_file hoặc source_file.")
+        elif not {"segment", "scene_start", "scene_end"}.issubset(rows[0]):
+            raise HTTPException(400, "timeline.csv cần có các cột segment, scene_start, scene_end.")
+        if mode == "prompt_timeline":
+            total_clips = len(rows)
+        else:
+            total_clips = sum(int(row["scene_end"]) - int(row["scene_start"]) + 1 for row in rows)
+        update_job(progress=2, stage="probe", total=total_clips, completed=0)
+        audio_files = {}
+        for name in os.listdir(audio_dir):
+            match = re.match(r"^(\d+)(?:[_. -].*)?\.(mp3|wav|m4a|aac|ogg|flac)$", name, re.I)
+            if match:
+                audio_files[int(match.group(1))] = os.path.join(audio_dir, name)
+        video_files = {}
+        for name in os.listdir(video_dir):
+            match = re.match(r"^(\d+)(?:[_. -].*)?\.(mp4|mov|mkv|webm|m4v)$", name, re.I)
+            if match:
+                video_files[int(match.group(1))] = os.path.join(video_dir, name)
+        ffmpeg = _ffmpeg_executable()
+        # Keep the original assembly output profile: 1280x720 at 30 fps.
+        source_sizes = []
+        source_has_audio = {}
+        for source in video_files.values():
+            probe = subprocess.run([ffmpeg, "-i", source], capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace")
+            match = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", probe.stderr)
+            if match:
+                source_sizes.append((int(match.group(1)), int(match.group(2))))
+                source_has_audio[source] = bool(re.search(r"Audio:", probe.stderr))
+        if not source_sizes and mode != "prompt_timeline":
+            raise HTTPException(400, "Không đọc được độ phân giải của các video nguồn.")
+        target_width, target_height = 1280, 720
+        update_job(progress=4, stage="encode")
+        intermediates = []
+        completed_clips = 0
+        if mode == "prompt_timeline":
+            path_root = os.path.dirname(timeline_path)
+            video_media_files = [os.path.join(root, name) for root, _, names in os.walk(video_dir)
+                                 for name in names if name.lower().endswith((".mp4", ".mov", ".mkv", ".webm", ".m4v"))]
+            video_media_files.sort(key=lambda path: (
+                int((re.search(r"\d+", os.path.basename(path)) or ["999999999"])[0]),
+                os.path.relpath(path, video_dir).casefold()))
+            def resolve_media(value, expected_dir):
+                raw = (value or "").replace("\\", "/").strip()
+                rel = PurePosixPath(raw)
+                if not raw or rel.is_absolute() or ".." in rel.parts:
+                    raise HTTPException(400, f"Đường dẫn media không hợp lệ trong timeline: {value}")
+                candidates = [os.path.join(path_root, *rel.parts)]
+                if rel.parts and rel.parts[0].lower() == expected_dir:
+                    candidates.append(os.path.join(path_root, *rel.parts[1:]))
+                candidates.extend(os.path.join(expected_dir == "audio" and audio_dir or video_dir, *rel.parts[-1:]))
+                for candidate in candidates:
+                    if os.path.isfile(candidate):
+                        return candidate
+                raise HTTPException(400, f"Không tìm thấy file {expected_dir} trong timeline: {value}")
+
+            for idx, row in enumerate(rows, 1):
+                try:
+                    audio_start = float(row["audio_start_sec"])
+                    audio_end = float(row["audio_end_sec"])
+                    display_duration = float(row["display_duration_sec"])
+                    source_in = float(row.get("source_in_sec") or 0)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"Thời gian không hợp lệ ở dòng timeline {idx + 1}.")
+                if audio_start < 0 or source_in < 0 or audio_end <= audio_start or display_duration <= 0:
+                    raise HTTPException(400, f"Khoảng thời gian không hợp lệ ở dòng timeline {idx + 1}.")
+                video_value = row.get("video_file") or row.get("source_file") or ""
+                try:
+                    source = resolve_media(video_value, "video")
+                except HTTPException:
+                    # Timelines may refer to scene_0001.mp4 while the project
+                    # stores the same prompt clips as 001.mp4, 002.mp4, etc.
+                    scene_number = re.search(r"(\d+)", os.path.basename(video_value))
+                    video_index = int(scene_number.group(1)) if scene_number else idx
+                    numbered_matches = []
+                    for candidate in video_media_files:
+                        candidate_name = os.path.basename(candidate)
+                        number_match = re.match(r"^(\d+)(?:[-_. ]|$)", candidate_name)
+                        if number_match and int(number_match.group(1)) == video_index:
+                            numbered_matches.append(candidate)
+                    exact_numbered = [candidate for candidate in numbered_matches
+                                      if os.path.splitext(os.path.basename(candidate))[0].isdigit()]
+                    if exact_numbered:
+                        source = exact_numbered[0]
+                    elif numbered_matches:
+                        source = numbered_matches[0]
+                    elif 1 <= video_index <= len(video_media_files):
+                        source = video_media_files[video_index - 1]
+                    else:
+                        raise HTTPException(400, f"Không tìm thấy video '{video_value}' và không có video thứ tự {video_index:03d} trong thư mục video/.")
+                piece = os.path.join(work, f"prompt-{idx:05d}.mp4")
+                duration = display_duration
+                if source not in source_has_audio:
+                    probe = subprocess.run([ffmpeg, "-i", source], capture_output=True, text=True,
+                                           encoding="utf-8", errors="replace")
+                    source_has_audio[source] = bool(re.search(r"Audio:", probe.stderr))
+                cmd = [ffmpeg, "-y", "-ss", f"{source_in:.6f}", "-i", source]
+                if source_has_audio[source]:
+                    cmd.extend(["-map", "0:a:0", "-af", "apad"])
+                else:
+                    cmd.extend(["-f", "lavfi", "-t", f"{duration:.6f}", "-i",
+                                "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "1:a:0"])
+                cmd.extend(["-map", "0:v:0", "-t", f"{duration:.6f}",
+                            "-vf", f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height},fps=30,format=yuv420p",
+                            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                            "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", piece])
+                run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                if run.returncode:
+                    raise HTTPException(500, f"Không xử lý được prompt {idx}: {run.stderr[-1200:]}")
+                intermediates.append(piece)
+                completed_clips += 1
+                update_job(progress=min(94, 4 + int(90 * completed_clips / max(1, total_clips))),
+                           stage="encode", completed=completed_clips, total=total_clips)
+        else:
+            video_uses = {}
+            for row in rows:
+                for scene_id in range(int(row["scene_start"]), int(row["scene_end"]) + 1):
+                    video_uses[scene_id] = video_uses.get(scene_id, 0) + 1
+            intermediates = []
+            completed_clips = 0
+            for row in rows:
+                idx = int(row["segment"])
+                if idx not in audio_files:
+                    raise HTTPException(400, f"Thiếu audio bắt đầu bằng {idx:03d}_ trong folder audio.")
+                start, end = int(row["scene_start"]), int(row["scene_end"])
+                scene_ids = list(range(start, end + 1))
+                missing = [n for n in scene_ids if n not in video_files]
+                if missing:
+                    raise HTTPException(400, f"Thiếu video cảnh: {', '.join(f'{n:03d}' for n in missing)}.")
+                audio = audio_files[idx]
+                duration = _ffmpeg_duration(ffmpeg, audio)
+                if duration <= 0:
+                    raise HTTPException(400, f"Audio {idx:03d} có thời lượng không hợp lệ.")
+                # Prompts request 8-second clips. Never reuse/loop a longer source
+                # to fill an audio allocation; take at most its first 8 seconds.
+                piece_duration = min(duration / len(scene_ids), 8.0)
+                pieces = []
+                for pos, scene_id in enumerate(scene_ids):
+                    piece = os.path.join(work, f"piece-{idx:04d}-{pos:04d}.mp4")
+                    source = video_files[scene_id]
+                    cmd = [ffmpeg, "-y", "-i", source]
+                    if not source_has_audio.get(source, False):
+                        cmd.extend(["-f", "lavfi", "-t", f"{piece_duration:.6f}", "-i",
+                                    "anullsrc=channel_layout=stereo:sample_rate=48000"])
+                    cmd.extend(["-t", f"{piece_duration:.6f}", "-map", "0:v:0"])
+                    cmd.extend(["-map", "0:a:0"] if source_has_audio.get(source, False) else ["-map", "1:a:0"])
+                    cmd.extend(["-vf", f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height},fps=30,format=yuv420p",
+                           "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                           "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2"])
+                    if source_has_audio.get(source, False):
+                        cmd.extend(["-af", "apad"])
+                    cmd.extend(["-movflags", "+faststart", piece])
+                    run = subprocess.run(cmd, capture_output=True, text=True,
+                                         encoding="utf-8", errors="replace")
+                    if run.returncode:
+                        raise HTTPException(500, f"Không xử lý được video {scene_id:03d}: {run.stderr[-1200:]}")
+                    pieces.append(piece)
+                    completed_clips += 1
+                    update_job(progress=min(88, 4 + int(84 * completed_clips / max(1, total_clips))),
+                               stage="encode", completed=completed_clips, total=total_clips)
+                    video_uses[scene_id] -= 1
+                    if video_uses[scene_id] == 0:
+                        try:
+                            os.remove(video_files[scene_id])
+                        except OSError:
+                            pass
+                concat_file = os.path.join(work, f"concat-{idx:04d}.txt")
+                with open(concat_file, "w", encoding="utf-8") as f:
+                    for piece in pieces:
+                        f.write("file '" + piece.replace("\\", "/").replace("'", "'\\''") + "'\n")
+                group = os.path.join(work, f"group-{idx:04d}.mp4")
+                run = subprocess.run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+                                      "-c", "copy", group], capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace")
+                if run.returncode:
+                    raise HTTPException(500, f"Không ghép được phân cảnh {idx:03d}: {run.stderr[-1200:]}")
+                for path in [*pieces, concat_file]:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                try:
+                    os.remove(audio)
+                except OSError:
+                    pass
+                intermediates.append(group)
+                update_job(progress=min(94, 88 + int(6 * len(intermediates) / max(1, len(rows)))), stage="audio/concat")
+        final_name = f"assembly-{uuid.uuid4().hex[:12]}.mp4"
+        final_path = os.path.join(CFG.media_dir, final_name)
+        os.makedirs(CFG.media_dir, exist_ok=True)
+        final_list = os.path.join(work, "final.txt")
+        update_job(progress=96, stage="finalize")
+        with open(final_list, "w", encoding="utf-8") as f:
+            for group in intermediates:
+                f.write("file '" + group.replace("\\", "/").replace("'", "'\\''") + "'\n")
+        run = subprocess.run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", final_list,
+                              "-c", "copy", "-movflags", "+faststart", final_path], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace")
+        if run.returncode:
+            raise HTTPException(500, f"Không xuất được video hoàn chỉnh: {run.stderr[-1200:]}")
+        download_token = uuid.uuid4().hex + uuid.uuid4().hex
+        expires_at = time.time() + 30 * 60
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            for old_token, (_, expiry) in list(_ASSEMBLY_DOWNLOADS.items()):
+                if expiry <= time.time():
+                    _ASSEMBLY_DOWNLOADS.pop(old_token, None)
+            _ASSEMBLY_DOWNLOADS[download_token] = (final_path, expires_at)
+            _write_assembly_state("downloads", download_token,
+                                  {"path": final_path, "expires_at": expires_at})
+        assembled = True
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            _ASSEMBLY_JOBS[job_id] = {"status": "completed", "download_url": f"/admin/video-assembly/download/{download_token}",
+                                      "filename": final_name, "size": os.path.getsize(final_path), "expires_at": expires_at,
+                                      "progress": 100, "stage": "completed"}
+            _write_assembly_state("jobs", job_id, _ASSEMBLY_JOBS[job_id])
+        return {"download_url": f"/admin/video-assembly/download/{download_token}",
+                "filename": final_name, "size": os.path.getsize(final_path)}
+    except HTTPException as exc:
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            _ASSEMBLY_JOBS[job_id] = {"status": "failed", "error": str(exc.detail)}
+            _write_assembly_state("jobs", job_id, _ASSEMBLY_JOBS[job_id])
+        if "No space left on device" in str(exc.detail):
+            raise HTTPException(507, "Ổ đĩa tạm hoặc ổ đĩa dữ liệu đã hết dung lượng. Hãy giải phóng dung lượng rồi thử ghép lại.")
+        raise
+    except OSError as exc:
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            _ASSEMBLY_JOBS[job_id] = {"status": "failed", "error": str(exc)}
+            _write_assembly_state("jobs", job_id, _ASSEMBLY_JOBS[job_id])
+        if getattr(exc, "errno", None) == 28:
+            raise HTTPException(507, "Ổ đĩa tạm hoặc ổ đĩa dữ liệu đã hết dung lượng. Hãy giải phóng dung lượng rồi thử ghép lại.")
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            _ASSEMBLY_JOBS[job_id] = {"status": "failed", "error": str(exc)}
+            _write_assembly_state("jobs", job_id, _ASSEMBLY_JOBS[job_id])
+        raise HTTPException(400, str(exc))
+    finally:
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
+        if final_path and not assembled:
+            try:
+                os.remove(final_path)
+            except OSError:
+                pass
+
+
+@app.get("/admin/video-assembly/jobs/{job_id}")
+def get_video_assembly_job(job_id: str, _=Depends(auth)):
+    with _ASSEMBLY_DOWNLOAD_LOCK:
+        job = _ASSEMBLY_JOBS.get(job_id) or _read_assembly_state("jobs", job_id)
+        if job:
+            _ASSEMBLY_JOBS[job_id] = job
+        if job and job.get("expires_at", time.time() + 1) <= time.time():
+            _ASSEMBLY_JOBS.pop(job_id, None)
+            job = None
+        return dict(job) if job else {"status": "not_found"}
+
+
+@app.get("/admin/video-assembly/download/{token}")
+def download_assembled_video(token: str):
+    with _ASSEMBLY_DOWNLOAD_LOCK:
+        item = _ASSEMBLY_DOWNLOADS.get(token)
+        if not item:
+            saved = _read_assembly_state("downloads", token)
+            if saved and saved.get("path"):
+                item = (saved["path"], float(saved.get("expires_at") or 0))
+                _ASSEMBLY_DOWNLOADS[token] = item
+        if item and item[1] <= time.time():
+            _ASSEMBLY_DOWNLOADS.pop(token, None)
+            item = None
+    if not item or not os.path.isfile(item[0]):
+        raise HTTPException(404, "Liên kết tải video không tồn tại hoặc đã hết hạn.")
+    path = item[0]
+    return FileResponse(path, filename=os.path.basename(path), media_type="video/mp4")
+
+
 # ------------------------- 管理：总览 -------------------------
 @app.get("/admin/status")
 def admin_status(_=Depends(auth)):
@@ -1642,8 +2205,10 @@ def admin_status(_=Depends(auth)):
         "tasks": store.list_tasks(20),
         "media_count": len(os.listdir(CFG.media_dir))
         if os.path.isdir(CFG.media_dir) else 0,
-        "browser_running": bool(engine.proc and engine.proc.poll() is None),
+        "browser_running": bool(engine.browser and
+                                (engine.proc is None or engine.proc.poll() is None)),
         "essential_cookies": list(ESSENTIAL_COOKIES),
+        "essential_cookie_alternatives": [],
         "base_url": f"{base}/v1" if base else "",
         "config": {"site": CFG.site_url, "cdp_port": CFG.cdp_port,
                    "max_concurrency": CFG.max_concurrency,
@@ -1655,44 +2220,75 @@ def admin_status(_=Depends(auth)):
     }
 
 
+@app.patch("/admin/config/concurrency")
+def update_concurrency(payload: dict = Body(...), _=Depends(auth)):
+    value = payload.get("max_concurrency")
+    if isinstance(value, bool):
+        raise HTTPException(400, "Số tác vụ đồng thời phải nằm trong khoảng 1–10")
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Số tác vụ đồng thời phải nằm trong khoảng 1–10")
+    if not 1 <= value <= MAX_CONCURRENCY:
+        raise HTTPException(400, "Số tác vụ đồng thời phải nằm trong khoảng 1–10")
+    try:
+        _persist_env("MUSE2API_CONCURRENCY", str(value))
+    except OSError as exc:
+        raise HTTPException(500, f"Không lưu được cấu hình: {exc}") from exc
+    CFG.max_concurrency = value
+    GEN_LOCK.set_limit(value)
+    return {"ok": True, "max_concurrency": value,
+            "message": "Đã áp dụng ngay; tác vụ đang chạy vẫn tiếp tục bình thường."}
+
+
 # ------------------------- 管理：账号池 -------------------------
 @app.get("/admin/accounts")
 def list_accounts(_=Depends(auth)):
     return {"accounts": store.list_accounts(), "stats": store.stats()}
 
 
+@app.put("/admin/accounts/order")
+def reorder_accounts(req: AccountOrderRequest, _=Depends(auth)):
+    return {"ids": store.reorder_accounts(req.ids)}
+
+
 @app.post("/admin/accounts")
 def add_account(req: AccountRequest, _=Depends(auth)):
     added: list[dict] = []
-    seen: list[dict] = []          # 本次导入的所有 cookie，用来检查核心项是否齐全
 
     if req.batch:
         for label, cookies in parse_batch(req.batch):
             acc = store.add_account(cookies, label)
-            seen.append(cookies)
+            missing = missing_essential_cookies(cookies)
             added.append({"id": acc["id"], "label": acc["label"],
                           "cookie_count": len(cookies),
-                          "expires_at": acc.get("expires_at")})
+                          "expires_at": acc.get("expires_at"),
+                          "essential_ok": not missing,
+                          "essential_missing": missing})
 
     cookies = dict(req.cookies)
     if req.cookie_header:
         cookies.update(parse_cookie_text(req.cookie_header))
     if cookies:
         acc = store.add_account(cookies, req.label, cookies_exp=req.expires)
-        seen.append(cookies)
+        missing = missing_essential_cookies(cookies)
         added.append({"id": acc["id"], "label": acc["label"],
                       "cookie_count": len(cookies),
-                      "expires_at": acc.get("expires_at")})
+                      "expires_at": acc.get("expires_at"),
+                      "essential_ok": not missing,
+                      "essential_missing": missing})
 
     if not added:
         raise HTTPException(400, "未解析到任何 cookie，请检查格式")
 
-    # 只要有一个账号把核心 cookie 凑齐就算通过（批量时按整体判断）
-    missing = [n for n in ESSENTIAL_COOKIES
-               if not any(n in c for c in seen)]
+    # Validate each account independently; cookies from separate accounts cannot be combined.
+    incomplete = [account for account in added if not account["essential_ok"]]
+    missing = sorted({name for account in incomplete
+                      for name in account["essential_missing"]})
     return {"added": added, "count": len(added),
             "essential_missing": missing,
-            "warning": (f"缺少核心 cookie：{', '.join(missing)}，该账号可能无法生成"
+            "incomplete_count": len(incomplete),
+            "warning": (f"缺少核心 cookie：{', '.join(missing)}；{len(incomplete)}/{len(added)} 个账号不完整"
                         if missing else "")}
 
 
@@ -1751,6 +2347,8 @@ async def test_account(aid: str, _=Depends(auth)):
             except Exception as exc:  # noqa: BLE001
                 store.touch_keepalive(aid, None, f"测试未确认（保留账号状态）: {str(exc)[:200]}")
                 return {"ok": False, "message": str(exc)[:200]}
+            finally:
+                engine.close_current_page()
 
     res = await asyncio.to_thread(_probe)
     if not res["ok"]:
@@ -1791,11 +2389,14 @@ def relogin(_=Depends(auth)):
     if not acc:
         raise HTTPException(400, "没有可用账号")
     try:
-        engine.start()
-        engine.refresh(acc["cookies"], acc.get("cookies_exp"))
+        with GEN_LOCK:
+            engine.start()
+            engine.refresh(acc["cookies"], acc.get("cookies_exp"))
         return {"ok": True, "account": acc["id"]}
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+    finally:
+        engine.close_current_page()
 
 
 # ------------------------- 管理：额度 -------------------------
@@ -1815,13 +2416,16 @@ async def query_quota(aid: str, _=Depends(auth)):
 
     def _probe():
         with GEN_LOCK:
-            engine.start()
-            q = engine.quota(acc["cookies"], acc.get("cookies_exp"), account_id=aid)
-            if not q.get("found"):
-                raise MuseGenerationError("额度面板未读到有效数据；旧缓存未覆盖")
-            q["checked_at"] = int(time.time())
-            store.update_account(aid, quota=q)
-            return q
+            try:
+                engine.start()
+                q = engine.quota(acc["cookies"], acc.get("cookies_exp"), account_id=aid)
+                if not q.get("found"):
+                    raise MuseGenerationError("额度面板未读到有效数据；旧缓存未覆盖")
+                q["checked_at"] = int(time.time())
+                store.update_account(aid, quota=q)
+                return q
+            finally:
+                engine.close_current_page()
 
     try:
         return await asyncio.to_thread(_probe)
@@ -1949,6 +2553,29 @@ def del_task(tid: str, _=Depends(auth)):
     if not store.delete_task(tid):
         raise HTTPException(404, "任务不存在")
     return {"deleted": True}
+
+
+@app.post("/admin/tasks/{tid}/cancel")
+def cancel_task(tid: str, _=Depends(auth)):
+    task = store.get_task(tid)
+    if not task or task.get("kind") not in ("image", "video"):
+        raise HTTPException(404, "Generation task not found")
+    if task.get("status") not in ("queued", "processing"):
+        return {"cancelled": False, "status": task.get("status"), "stop_clicked": False}
+    with TASK_CANCEL_LOCK:
+        event = TASK_CANCEL_EVENTS.get(tid)
+    # A persisted queued/processing row can outlive the in-memory worker registry
+    # (for example after a server restart). Still stop its isolated Muse session
+    # and clear the stale running state so the prompt can be retried.
+    if event:
+        event.set()
+    stop_clicked = False
+    try:
+        stop_clicked = bool(engine.task_views.cancel_generation(tid))
+    except Exception as exc:  # noqa: BLE001
+        log.info("Muse stop control unavailable for task %s: %s", tid, exc)
+    store.update_task(tid, status="cancelled", error="Cancelled by user")
+    return {"cancelled": True, "status": "cancelled", "stop_clicked": stop_clicked}
 
 
 @app.post("/admin/tasks/clear")
@@ -2081,13 +2708,18 @@ async def task_session_reopen(task_id: str, _=Depends(auth)):
     def reopen():
         if _task_session_info(task_id)["available"]:
             return
-        reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=20, record_use=False)
+        if not GEN_LOCK.acquire(timeout=20):
+            raise MuseGenerationError("Browser is busy; try again later.")
+        reserved = None
         try:
+            reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=20, record_use=False)
             if not _task_session_info(task_id)["available"]:
                 engine.reopen_task_view(task_id, reserved, task["muse_url"])
                 store.update_task(task_id, session_reopened=True)
         finally:
-            ACCOUNT_POOL.release(account["id"])
+            if reserved:
+                ACCOUNT_POOL.release(account["id"])
+            GEN_LOCK.release()
     try:
         await asyncio.to_thread(reopen)
     except (MuseAuthError,MuseGenerationError,ValueError) as exc:
@@ -2130,28 +2762,66 @@ def _video_file_saved(task_id: str) -> bool:
     return isinstance(result, dict) and bool(result.get("url"))
 
 
-def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int = 60,
-                          lock_timeout: int = 120, account_wait: int = 60) -> dict:
-    if not GEN_LOCK.acquire(timeout=lock_timeout):
-        raise MuseGenerationError("Trình duyệt đang bận. Hãy thử lấy lại sau.")
-    reserved = None
+def _task_video_duration(task: dict) -> int:
+    """Get the requested duration, including tasks created before it was stored separately."""
     try:
-        reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=account_wait, record_use=False)
-        engine.start()
-        return engine.collect_rendered(
+        duration = int(task.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if duration > 0:
+        return duration
+    prompt = str(task.get("api_prompt") or task.get("prompt") or "")
+    match = re.search(r"Duration:\s*exactly\s*(\d+)\s*seconds", prompt, re.IGNORECASE)
+    return int(match.group(1)) if match else 6
+
+
+def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int = 60,
+                          lock_timeout: int = 120, account_wait: int = 60,
+                          expected_duration: int = 10) -> dict:
+    reserved = None
+    worker_engine = None
+    worker_profile = None
+    try:
+        reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=account_wait,
+                                        record_use=False, allow_overflow=True)
+        # Each recovery gets its own short-lived Chromium process/profile/CDP port.
+        # It can run beside all configured generation workers and is fully closed
+        # and removed after this single rendered file has been retrieved.
+        os.makedirs(CFG.profile_root, exist_ok=True)
+        worker_profile = tempfile.mkdtemp(prefix="muse2api-recovery-", dir=CFG.profile_root)
+        with socket.socket() as port_probe:
+            port_probe.bind(("127.0.0.1", 0))
+            worker_port = port_probe.getsockname()[1]
+        worker_cfg = copy.copy(CFG)
+        worker_cfg.cdp_port = worker_port
+        worker_cfg.base_dir = worker_profile
+        worker_cfg.profile_root = os.path.join(worker_profile, "profiles")
+        worker_cfg.ensure_dirs()
+        worker_engine = MuseEngine(worker_cfg)
+        worker_engine.start()
+        result = worker_engine.collect_rendered(
             reserved["cookies"], muse_url, expect=kind, timeout=timeout,
-            expires=reserved.get("cookies_exp"), account_id=reserved["id"])
+            expires=reserved.get("cookies_exp"), account_id=reserved["id"],
+            expected_duration=expected_duration)
+        os.makedirs(CFG.media_dir, exist_ok=True)
+        destination = os.path.join(CFG.media_dir, result["filename"])
+        shutil.move(result["path"], destination)
+        result["path"] = destination
+        return result
     finally:
+        if worker_engine:
+            try:
+                worker_engine.stop()
+            except Exception:
+                log.warning("Could not stop temporary video-recovery worker", exc_info=True)
+        if worker_profile:
+            shutil.rmtree(worker_profile, ignore_errors=True)
         if reserved:
             ACCOUNT_POOL.release(reserved["id"])
-        try:
-            engine.close_current_page()
-        except Exception:
-            pass
-        GEN_LOCK.release()
 
 
 _HARVEST_TURN = threading.Lock()
+_RECOVERY_WORKER_LOCK = threading.Lock()
 _HARVEST_NEXT: dict[str, float] = {}
 _HARVEST_MISS: dict[str, int] = {}
 
@@ -2166,18 +2836,24 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False):
     timeout = 60
     lock_timeout = 8 if quick else 120
     account_wait = 8 if quick else 60
-    errors = []
-    for account in accounts:
-        try:
-            return _collect_from_account(
-                account, muse_url, kind, timeout=timeout,
-                lock_timeout=lock_timeout, account_wait=account_wait), account
-        except MuseGenerationError as exc:
-            message = str(exc)
-            if "đang bận" in message or "忙" in message:
-                raise
-            errors.append(message)
-    raise MuseGenerationError(errors[0] if errors else "Không lấy được file đã render.")
+    if not _RECOVERY_WORKER_LOCK.acquire(timeout=lock_timeout):
+        raise MuseGenerationError("Worker lấy video khác đang chạy. Hãy thử lại sau.")
+    try:
+        errors = []
+        for account in accounts:
+            try:
+                return _collect_from_account(
+                    account, muse_url, kind, timeout=timeout,
+                    lock_timeout=lock_timeout, account_wait=account_wait,
+                    expected_duration=_task_video_duration(task)), account
+            except MuseGenerationError as exc:
+                message = str(exc)
+                if "đang bận" in message or "忙" in message:
+                    raise
+                errors.append(message)
+        raise MuseGenerationError(errors[0] if errors else "Không lấy được file đã render.")
+    finally:
+        _RECOVERY_WORKER_LOCK.release()
 
 
 def _harvest_ready(task: dict, now: float) -> bool:
@@ -2200,7 +2876,7 @@ def _pick_harvest_task(preferred: dict | None) -> dict | None:
         return preferred
     best = None
     best_rank = None
-    for task in list(store.tasks.values()):
+    for task in store.list_tasks(None, kind="video", statuses=("processing", "failed")):
         if not _harvest_ready(task, now):
             continue
         rank = (_HARVEST_MISS.get(task["id"], 0), float(task.get("updated_at") or 0))
@@ -2432,6 +3108,7 @@ def _probe_account_sync(aid: str, check_quota: bool = False) -> dict:
             except Exception as qe:  # noqa: BLE001
                 log.warning("读取账号 %s 额度失败: %s", aid, qe)
             finally:
+                engine.close_current_page()
                 GEN_LOCK.release()
         updated = store.get_account(aid) or {}
         return {
@@ -2528,11 +3205,6 @@ def _warmup_browser_sync():
 async def _keepalive_loop():
     """后台常驻守护任务：每 15 分钟轮询一次账号健康状态并保持 VM 热备。"""
     log.info("【自动保活守护进程】已启动，检测周期: 15 分钟")
-    await asyncio.sleep(1)
-    try:
-        await asyncio.to_thread(_warmup_browser_sync)
-    except Exception as e:  # noqa: BLE001
-        log.warning("【浏览器预热】异常: %s", e)
     while True:
         try:
             await run_keepalive_all(force=False)
@@ -2562,335 +3234,17 @@ def get_keepalive_status(_=Depends(auth)):
 
 
 # ------------------------- 仓库实时更新检测、通知与一键在线升级 -------------------------
-REPO_URL = "https://github.com/czg86389-hub/muse2api"
-TRACKED_REPO_PATHS = [
-    "app.py", "engine.py", "session_views.py", "store.py", "cdp.py", "config.py",
-    "admin.html", "README.md", "version.json", "requirements.txt",
-    "Dockerfile", "docker-compose.yml", ".env.example", ".gitignore",
-    "LICENSE", "extension", "deploy", "tools",
-]
-_UPDATE_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
-
-
-def _read_env_key(key: str) -> str:
-    val = os.environ.get(key, "").strip()
-    if val:
-        return val
-    path = os.path.join(CFG.base_dir, ".env")
-    try:
-        with open(path, encoding="utf-8") as f:
-            for ln in f.read().splitlines():
-                s = ln.strip()
-                if s.startswith(key + "="):
-                    return s.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    return ""
-
-
-def _read_local_version() -> dict:
-    p = os.path.join(BASE_DIR, "version.json")
-    try:
-        with open(p, encoding="utf-8") as f:
-            obj = json.load(f)
-            if isinstance(obj, dict):
-                return obj
-    except Exception:
-        pass
-    return {"version": "1.5.0", "highlights": []}
-
-
-def _installed_sha_file() -> str:
-    return os.path.join(CFG.data_dir, ".installed_sha")
-
-
-def _git(args: list[str], timeout: int = 30):
-    import subprocess
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return subprocess.run(
-        ["git", "-c", f"safe.directory={BASE_DIR}", *args],
-        cwd=BASE_DIR,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
-
-
-def _ensure_git_repo(token: str = ""):
-    """确保 BASE_DIR 已初始化为绑定 czg86389-hub/muse2api 的 Git 仓库。"""
-    git_dir = os.path.join(BASE_DIR, ".git")
-    remote_url = f"https://x-access-token:{token}@github.com/czg86389-hub/muse2api.git" if token else f"{REPO_URL}.git"
-    if not os.path.isdir(git_dir):
-        _git(["init", "-b", "main"])
-        _git(["remote", "add", "origin", remote_url])
-        _git(["fetch", "origin", "main"], timeout=45)
-        _git(["reset", "--mixed", "origin/main"])
-    else:
-        _git(["remote", "set-url", "origin", remote_url])
-    _git(["config", "user.name", "czg86389-hub"])
-    _git(["config", "user.email", "czg86389-hub@users.noreply.github.com"])
-
-
-def _check_update_sync(force: bool = False) -> dict:
-    """检测 GitHub 官方仓库 (czg86389-hub/muse2api) 是否有新版本或新提交。
-    默认缓存 90 秒，防止频繁刷新触发 GitHub API 速率限制。"""
-    now = time.time()
-    if not force and _UPDATE_CACHE["data"] and (now - _UPDATE_CACHE["ts"]) < 90:
-        return _UPDATE_CACHE["data"]
-
-    import requests
-    token = _read_env_key("GITHUB_TOKEN")
-    local_ver_obj = _read_local_version()
-    local_version = str(local_ver_obj.get("version") or "1.5.0")
-
-    has_git = os.path.isdir(os.path.join(BASE_DIR, ".git"))
-    local_sha, local_msg, local_ts = "", "", 0
-    if has_git:
-        try:
-            r_sha = _git(["rev-parse", "--short", "HEAD"])
-            if r_sha.returncode == 0:
-                local_sha = r_sha.stdout.strip()[:7]
-            r_log = _git(["log", "-1", "--format=%s||%ct"])
-            if r_log.returncode == 0 and "||" in r_log.stdout:
-                parts = r_log.stdout.strip().split("||", 1)
-                local_msg = parts[0]
-                local_ts = int(parts[1])
-        except Exception:
-            pass
-
-    if not local_sha and os.path.isfile(_installed_sha_file()):
-        try:
-            with open(_installed_sha_file(), encoding="utf-8") as f:
-                local_sha = f.read().strip()[:7]
-        except OSError:
-            pass
-
-    remote_version = local_version
-    highlights = list(local_ver_obj.get("highlights") or [])
-    try:
-        rv = requests.get(
-            f"https://raw.githubusercontent.com/czg86389-hub/muse2api/main/version.json?t={int(now)}",
-            timeout=6,
-        )
-        if rv.status_code == 200:
-            rvj = rv.json()
-            if isinstance(rvj, dict):
-                remote_version = str(rvj.get("version") or remote_version)
-                if rvj.get("highlights"):
-                    highlights = list(rvj["highlights"])
-    except Exception:
-        pass
-
-    remote_sha, remote_msg, remote_time = "", "", ""
-    recent_commits = []
-    try:
-        headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "muse2api-updater"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        resp = requests.get(
-            "https://api.github.com/repos/czg86389-hub/muse2api/commits?sha=main&per_page=5",
-            headers=headers,
-            timeout=6,
-        )
-        if resp.status_code == 200 and isinstance(resp.json(), list):
-            commits = resp.json()
-            for idx, c in enumerate(commits):
-                sha7 = (c.get("sha") or "")[:7]
-                c_msg = ((c.get("commit") or {}).get("message") or "").splitlines()[0]
-                c_date = (((c.get("commit") or {}).get("committer") or {}).get("date") or "")
-                c_url = c.get("html_url") or f"{REPO_URL}/commit/{sha7}"
-                if idx == 0:
-                    remote_sha = sha7
-                    remote_msg = c_msg
-                    remote_time = c_date
-                recent_commits.append({
-                    "sha": sha7,
-                    "message": c_msg,
-                    "date": c_date,
-                    "url": c_url,
-                })
-    except Exception:
-        pass
-
-    # 若用户通过 Docker/ZIP 部署（无 .git）且首次运行版本一致，记录初始基准 SHA
-    if not local_sha and remote_sha and local_version == remote_version:
-        local_sha = remote_sha
-        try:
-            with open(_installed_sha_file(), "w", encoding="utf-8") as f:
-                f.write(remote_sha)
-        except OSError:
-            pass
-
-    def _parse_v(v: str) -> tuple[int, ...]:
-        try:
-            return tuple(int(x) for x in re.findall(r"\d+", v))
-        except Exception:
-            return (0,)
-
-    has_update = False
-    if remote_sha and local_sha:
-        has_update = (remote_sha != local_sha)
-    elif remote_version and local_version:
-        has_update = _parse_v(remote_version) > _parse_v(local_version)
-
-    data = {
-        "repo_url": REPO_URL,
-        "has_git": has_git,
-        "local_version": local_version,
-        "remote_version": remote_version,
-        "local_sha": local_sha,
-        "local_msg": local_msg,
-        "local_ts": local_ts,
-        "remote_sha": remote_sha,
-        "remote_msg": remote_msg,
-        "remote_time": remote_time,
-        "has_update": has_update,
-        "up_to_date": not has_update and bool(remote_sha or remote_version),
-        "highlights": highlights,
-        "recent_commits": recent_commits,
-        "checked_at": int(now),
-    }
-    _UPDATE_CACHE["ts"] = now
-    _UPDATE_CACHE["data"] = data
-    return data
-
-
-def _upgrade_from_github_sync() -> dict:
-    """从 GitHub 拉取最新代码覆盖核心文件（兼容 Git 与无 Git 的 Docker/ZIP 环境），绝不触碰 .env 与 data/。"""
-    import requests
-    import tarfile
-
-    token = _read_env_key("GITHUB_TOKEN")
-    upgraded_via = ""
-    try:
-        _ensure_git_repo(token)
-        f_res = _git(["fetch", "origin", "main"], timeout=45)
-        if f_res.returncode == 0:
-            _git(["checkout", "-f", "origin/main", "--", "."])
-            _git(["reset", "--mixed", "origin/main"])
-            upgraded_via = "git"
-    except Exception as e:
-        log.warning("Git 拉取更新失败，将使用 Tarball 方式更新: %s", e)
-
-    if not upgraded_via:
-        resp = requests.get(
-            "https://codeload.github.com/czg86389-hub/muse2api/tar.gz/refs/heads/main",
-            timeout=60,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(502, f"下载 GitHub 更新包失败 (HTTP {resp.status_code})")
-        protected_files = {".env", "data/accounts.json", "data/tasks.json"}
-        with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
-            for member in tar.getmembers():
-                parts = member.name.split("/", 1)
-                if len(parts) < 2 or not parts[1]:
-                    continue
-                rel = parts[1].replace("\\", "/")
-                if ".." in rel or rel in protected_files:
-                    continue
-                target_path = os.path.join(BASE_DIR, rel)
-                if member.isdir():
-                    os.makedirs(target_path, exist_ok=True)
-                elif member.isfile():
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    fobj = tar.extractfile(member)
-                    if fobj is not None:
-                        with open(target_path, "wb") as out_f:
-                            out_f.write(fobj.read())
-        upgraded_via = "tarball"
-
-    _UPDATE_CACHE["ts"] = 0.0
-    status = _check_update_sync(force=True)
-    if status.get("remote_sha"):
-        try:
-            with open(_installed_sha_file(), "w", encoding="utf-8") as f:
-                f.write(status["remote_sha"])
-            status["local_sha"] = status["remote_sha"]
-            status["has_update"] = False
-            status["up_to_date"] = True
-        except OSError:
-            pass
-    return {
-        "ok": True,
-        "via": upgraded_via,
-        "message": f"已成功更新至最新版本 {status.get('remote_version')} ({status.get('remote_sha')})",
-        "status": status,
-    }
-
-
-@app.get("/admin/update/check")
-@app.get("/admin/repo/status")
-async def admin_check_update(force: bool = False):
-    """供所有已部署节点实时检测 GitHub 官方仓库是否有新版本更新。"""
-    return await asyncio.to_thread(_check_update_sync, force)
-
-
-@app.post("/admin/update/upgrade")
-@app.post("/admin/repo/pull")
-async def admin_upgrade_now(payload: dict = Body(default={}), _=Depends(auth)):
-    """一键从 GitHub 官方仓库拉取最新更新并自动平滑重启服务。"""
-    res = await asyncio.to_thread(_upgrade_from_github_sync)
-    restart = payload.get("restart", True) if isinstance(payload, dict) else True
-    if restart:
-        def _delayed_restart():
-            time.sleep(0.5)
-            try:
-                engine.stop()
-            except Exception:
-                pass
-            os._exit(0)
-        threading.Thread(target=_delayed_restart, daemon=True).start()
-    return res
-
-
-@app.post("/admin/repo/push")
-async def admin_repo_push(payload: dict = Body(default={}), _=Depends(auth)):
-    """维护者专用：将当前节点核心代码推送到 GitHub 仓库（自动过滤 .env 与 data 目录）。"""
-    msg = (payload.get("message") or "").strip() or f"chore: sync update ({time.strftime('%Y-%m-%d %H:%M:%S')})"
-    new_token = (payload.get("github_token") or "").strip()
-    if new_token:
-        _persist_env("GITHUB_TOKEN", new_token)
-        os.environ["GITHUB_TOKEN"] = new_token
-    token = new_token or _read_env_key("GITHUB_TOKEN")
-
-    def _do_push():
-        _ensure_git_repo(token)
-        existing_paths = [p for p in TRACKED_REPO_PATHS if os.path.exists(os.path.join(BASE_DIR, p))]
-        _git(["add", "--", *existing_paths])
-        st = _git(["status", "--porcelain", "--", *existing_paths])
-        committed = False
-        if st.stdout.strip():
-            c_res = _git(["commit", "-m", msg])
-            if c_res.returncode != 0:
-                raise HTTPException(500, f"Git commit 失败: {c_res.stderr or c_res.stdout}")
-            committed = True
-        p_res = _git(["push", "origin", "HEAD:main"], timeout=60)
-        if p_res.returncode != 0:
-            err = (p_res.stderr or p_res.stdout or "").strip()
-            raise HTTPException(500, f"Git push 失败: {err[:300]}")
-        _UPDATE_CACHE["ts"] = 0.0
-        status = _check_update_sync(force=True)
-        return {
-            "ok": True,
-            "committed": committed,
-            "message": "已成功提交并推送到 GitHub 仓库",
-            "status": status,
-        }
-
-    return await asyncio.to_thread(_do_push)
-
-
 @app.on_event("startup")
 async def _startup():
-    for task in list(store.tasks.values()):
+    for task in store.list_tasks(None, statuses=("queued", "processing")):
         if task.get("kind") == "video":
             _drop_page_clip(task)
         if task.get("kind") in ("image", "video") and task.get("status") in ("queued", "processing"):
             if task.get("kind") == "video" and _safe_muse_thread(task.get("muse_url")):
+                store.delete_task_input(task["id"])
                 continue
             store.update_task(task["id"], status="failed", error="服务重启中断了任务，请重新提交")
+    store.prune_task_inputs()
     if not CFG.api_key:
         import secrets
         new_key = "m2a_" + secrets.token_hex(24)

@@ -205,6 +205,32 @@ class TaskSessionViews:
                 self._disconnect(entry)
                 raise RuntimeError("Không cuộn được phiên trình duyệt của tác vụ này.") from exc
 
+    def cancel_generation(self, task_id: str) -> bool:
+        """Click Muse's active stop control in this task's isolated browser target."""
+        entry = self._entry(task_id)
+        clicked = False
+        with entry.lock:
+            try:
+                cdp = self._connection(entry)
+                script = """(function(){
+                  var b=document.querySelector('[data-testid="hatch-composer-stop-button"]');
+                  if(!b){
+                    b=[].slice.call(document.querySelectorAll('button')).find(function(x){
+                      var t=((x.getAttribute('aria-label')||'')+' '+(x.getAttribute('title')||'')+' '+(x.innerText||''));
+                      return /stop|停止|dừng/i.test(t);
+                    });
+                  }
+                  if(!b)return false;
+                  b.click();return true;
+                })()"""
+                clicked = bool(cdp.js(script, timeout=5))
+            except Exception as exc:
+                self._disconnect(entry)
+                log.info("Muse stop button unavailable for task %s: %s", task_id, exc)
+        # Dispose only this task's isolated browser context to interrupt a stuck CDP wait.
+        self.forget(task_id)
+        return clicked
+
     def _dispose(self, entry: _TaskSession, dispose_context: bool = True):
         with entry.lock:
             entry.closed = True

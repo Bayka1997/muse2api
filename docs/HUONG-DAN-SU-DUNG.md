@@ -141,7 +141,7 @@ Trình duyệt lưu khóa để dùng lần sau. Không chia sẻ ảnh có khó
 | 账号标签（可留空） | Nhãn tài khoản, có thể bỏ trống | muse-main |
 | 读取并导入 | Đọc và nhập cookie | Nút thực hiện |
 
-Các cookie cốt lõi gồm `hatch_sess`, `hatch_gw`, `hatch_vml`, `hatch_native_auth_device`. Không dùng `document.cookie` để thay thế việc xuất cookie đầy đủ. Để thêm tài khoản khác, đăng nhập tài khoản đó trong trình duyệt rồi nhập tiếp với nhãn dễ phân biệt.
+Các cookie cốt lõi cần có gồm `hatch_sess`, `hatch_vml`, `hatch_native_auth_device`. Không dùng `document.cookie` để thay thế việc xuất cookie đầy đủ. Để thêm tài khoản khác, đăng nhập tài khoản đó trong trình duyệt rồi nhập tiếp với nhãn dễ phân biệt.
 
 ## 5. Nhập cookie thủ công
 
@@ -155,8 +155,8 @@ Nếu không dùng tiện ích, mở **Lấy Cookie** và làm theo phần **Sao
 Nhập hàng loạt: mỗi dòng là một tài khoản, theo cấu trúc `nhãn | chuỗi cookie`:
 
 ```text
-acc-01 | hatch_sess=GIA_TRI_1; hatch_gw=GIA_TRI_2; hatch_vml=GIA_TRI_3; hatch_native_auth_device=GIA_TRI_4
-acc-02 | hatch_sess=GIA_TRI_5; hatch_gw=GIA_TRI_6; hatch_vml=GIA_TRI_7; hatch_native_auth_device=GIA_TRI_8
+acc-01 | hatch_sess=GIA_TRI_1; hatch_vml=GIA_TRI_2; hatch_native_auth_device=GIA_TRI_3
+acc-02 | hatch_sess=GIA_TRI_4; hatch_vml=GIA_TRI_5; hatch_native_auth_device=GIA_TRI_6
 ```
 
 Đây là ví dụ cấu trúc, không phải cookie dùng được. Khi phiên thay đổi, dùng nút **Cập nhật Cookie** của đúng tài khoản để thay bằng chuỗi mới.

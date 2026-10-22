@@ -106,7 +106,7 @@ class Config:
     image_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_IMAGE_TIMEOUT", "240")))
     video_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_VIDEO_TIMEOUT", "600")))
     chat_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_CHAT_TIMEOUT", "300")))
-    max_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_CONCURRENCY", "8"))))
+    max_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_CONCURRENCY", "2"))))
     session_view_ttl: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_SESSION_VIEW_TTL", "120"))))
     session_view_max_retained: int = field(default_factory=lambda: max(0, int(_env("MUSE2API_SESSION_VIEW_MAX_RETAINED", "2"))))
     # Mỗi cookie giữ tối đa từng này video. Batch UI chia tổng đã chọn đều cho các cookie.
@@ -150,6 +150,10 @@ class Config:
     @property
     def tasks_file(self) -> str:
         return os.path.join(self.data_dir, "tasks.json")
+
+    @property
+    def tasks_db_file(self) -> str:
+        return os.path.join(self.data_dir, "tasks.sqlite3")
 
     def ensure_dirs(self):
         for d in (self.base_dir, self.data_dir, self.media_dir, self.download_dir,

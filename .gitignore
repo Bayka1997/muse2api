@@ -33,8 +33,10 @@ wheels/
 *.pem
 
 # Runtime & User Data
+data/
 data/accounts.json
 data/tasks.json
+data/tasks.sqlite3*
 data/.installed_sha
 data/debug-*.json
 data/media/*
