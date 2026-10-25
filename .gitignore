@@ -34,6 +34,7 @@ wheels/
 
 # Runtime & User Data
 data/
+source/
 data/accounts.json
 data/tasks.json
 data/tasks.sqlite3*

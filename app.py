@@ -33,6 +33,7 @@ import io
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
@@ -587,6 +588,7 @@ class VideoRequest(BaseModel):
     image: Any = None
     image_url: Any = None
     reference_image: str | None = None
+    reference_images: list[Any] | None = None
     account_id: str | None = None
 
 
@@ -879,7 +881,7 @@ def build_video_prompt(r: VideoRequest) -> str:
     ar = (r.aspect_ratio or "").strip().lower()
     sz = (r.size or "").strip().lower()
     dur = r.duration or 6
-    has_ref = bool(r.reference_image or r.image or r.image_url)
+    has_ref = bool(r.reference_image or r.reference_images or r.image or r.image_url)
 
     is_vertical = any(k in ar or k in sz for k in ("9:16", "9/16", "portrait", "竖屏", "720x1280", "1080x1920"))
 
@@ -1421,13 +1423,22 @@ async def images_edits(request: Request, _=Depends(auth)):
 @app.post("/v1/videos")
 @app.post("/v1/videos/generations")
 async def create_video(req: VideoRequest, _=Depends(auth)):
-    ref_img = None
-    if req.reference_image:
-        ref_img = req.reference_image
+    ref_img = []
+    if req.reference_images:
+        ref_img = [
+            (item.get("data") or item.get("url") or item.get("b64_json") or item.get("image_url"))
+            if isinstance(item, dict) else item
+            for item in req.reference_images
+        ]
+    elif req.reference_image:
+        ref_img = [req.reference_image]
     elif req.image_url:
-        ref_img = req.image_url if isinstance(req.image_url, str) else (req.image_url.get("url") if isinstance(req.image_url, dict) else None)
+        ref_img = [req.image_url if isinstance(req.image_url, str) else (req.image_url.get("url") if isinstance(req.image_url, dict) else None)]
     elif req.image:
-        ref_img = req.image.get("url") if isinstance(req.image, dict) else req.image
+        ref_img = [req.image.get("url") if isinstance(req.image, dict) else req.image]
+    ref_img = [item for item in ref_img if item]
+    if not ref_img:
+        ref_img = None
 
     prompt = build_video_prompt(req)
     timeout = req.timeout or CFG.video_timeout
@@ -1475,8 +1486,18 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
         except Exception as exc:  # noqa: BLE001
             if _video_file_saved(tid):
                 return
-            store.update_task(tid, status="cancelled" if cancel_event.is_set() else "failed",
+            failed_status = "cancelled" if cancel_event.is_set() else "failed"
+            store.update_task(tid, status=failed_status,
                               elapsed=round(time.time() - timing["t0"], 1), error=str(exc))
+            # Muse can finish rendering even when the normal download path fails
+            # (for example, a transient local file error). Start recovery as soon
+            # as the task fails so a rendered video does not remain in the error list.
+            if failed_status == "failed" and task_data.get("kind") == "video":
+                try:
+                    _schedule_rendered_harvest(store.get_task(tid) or task_data)
+                except Exception:  # noqa: BLE001
+                    log.warning("Could not schedule rendered-video recovery for %s", tid,
+                                exc_info=True)
         finally:
             store.delete_task_input(tid)
             _forget_task_cancel(tid)
@@ -1495,6 +1516,14 @@ def get_video(task_id: str, _=Depends(auth)):
     _schedule_rendered_harvest(t)
     out = dict(t)
     status = out.get("status")
+    # A download may have completed just before a timeout/error was persisted.
+    # If the task already points at a real local video file, report it as done.
+    if status == "failed" and _task_media_path(out):
+        path = _task_media_path(out)
+        if os.path.isfile(path) and os.path.getsize(path) > 0 and not file_is_page_clip(path):
+            store.update_task(task_id, status="completed", progress=100, error=None)
+            out.update(status="completed", progress=100, error=None)
+            status = "completed"
     if status == "failed":
         with _COLLECTING_LOCK:
             recovering = task_id in _COLLECTING_TASKS
@@ -1836,6 +1865,21 @@ def get_media(name: str, download: bool = False):
     return FileResponse(p, filename=name if download else None)
 
 
+@app.head("/v1/media/{name}")
+def head_media(name: str):
+    """Return media metadata without streaming the media body."""
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "非法文件名")
+    path = os.path.join(CFG.media_dir, name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "文件不存在")
+    return Response(
+        status_code=200,
+        media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
+        headers={"Content-Length": str(os.path.getsize(path)), "Accept-Ranges": "bytes"},
+    )
+
+
 def _ffmpeg_executable() -> str:
     try:
         import imageio_ffmpeg
@@ -1852,6 +1896,20 @@ def _ffmpeg_duration(ffmpeg: str, path: str) -> float:
     if not match:
         raise ValueError(f"Không đọc được thời lượng audio: {os.path.basename(path)}")
     return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+
+
+def _timeline_timecode(value: str) -> float:
+    """Parse seconds or HH:MM:SS[.mmm] timecodes from a new timeline."""
+    value = (value or "").strip()
+    if not value:
+        raise ValueError("timecode trống")
+    if ":" not in value:
+        return float(value)
+    parts = value.split(":")
+    if len(parts) != 3:
+        raise ValueError("timecode phải có dạng HH:MM:SS[.mmm]")
+    hours, minutes, seconds = parts
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
 @app.post("/admin/video-assembly")
@@ -1877,6 +1935,16 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
             _write_assembly_state("jobs", job_id, current)
     try:
         work = tempfile.mkdtemp(prefix="muse-assembly-", dir=CFG.data_dir)
+        upload_sizes = []
+        for upload in files:
+            size = int(getattr(upload, "size", 0) or 0)
+            if not size:
+                upload.file.seek(0, os.SEEK_END)
+                size = upload.file.tell()
+                upload.file.seek(0)
+            upload_sizes.append(size)
+        upload_total = sum(upload_sizes)
+        upload_copied = 0
         for upload in files:
             rel = PurePosixPath((upload.filename or "").replace("\\", "/"))
             if rel.is_absolute() or ".." in rel.parts:
@@ -1884,7 +1952,16 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
             target = os.path.join(work, *rel.parts)
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with open(target, "wb") as out:
-                shutil.copyfileobj(upload.file, out)
+                while True:
+                    chunk = upload.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    upload_copied += len(chunk)
+                    if upload_total:
+                        upload_progress = 1 + int(8 * upload_copied / upload_total)
+                        update_job(progress=min(upload_progress, 9), stage="upload",
+                                   uploaded=upload_copied, upload_total=upload_total)
             upload.file.close()
         audio_dir = next((os.path.join(root, d) for root, dirs, _ in os.walk(work)
                           for d in dirs if d.lower() == "audio"), None)
@@ -1892,8 +1969,8 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
                           for d in dirs if d.lower() == "video"), None)
         timeline_path = next((os.path.join(root, name) for root, _, names in os.walk(work)
                               for name in names if name.lower() == "timeline.csv"), None)
-        if not audio_dir or not video_dir or not timeline_path:
-            raise HTTPException(400, "Cần chọn folder chứa timeline.csv, audio/ và video/.")
+        if not video_dir or not timeline_path:
+            raise HTTPException(400, "Cần chọn folder chứa timeline.csv và video/.")
         with open(timeline_path, "rb") as f:
             timeline_bytes = f.read()
         if timeline_bytes.startswith((b"\xff\xfe", b"\xfe\xff")):
@@ -1905,7 +1982,7 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
                 # Excel on Windows may save CSV files in the local ANSI code page.
                 timeline_text = timeline_bytes.decode("cp1252", errors="replace")
         rows = list(csv.DictReader(io.StringIO(timeline_text, newline="")))
-        if mode not in {"segments", "prompt_timeline"}:
+        if mode not in {"segments", "prompt_timeline", "render_timeline"}:
             raise HTTPException(400, "Kiểu ghép video không hợp lệ.")
         if not rows:
             raise HTTPException(400, "timeline.csv không có dòng dữ liệu.")
@@ -1913,22 +1990,34 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
         # an older admin page (or omitting the mode form field) still use the
         # per-prompt audio timing columns instead of the legacy segment schema.
         timeline_columns = set(rows[0])
-        prompt_timing_columns = {"audio_start_sec", "audio_end_sec", "display_duration_sec"}
-        if prompt_timing_columns.issubset(timeline_columns):
+        prompt_timing_columns = {"audio_start_sec", "audio_end_sec"}
+        has_tc_timing = {"start_tc", "end_tc", "duration_s"}.issubset(timeline_columns)
+        has_sec_timing = "display_duration_sec" in timeline_columns
+        has_render_timeline = {"render_id", "start_tc", "end_tc", "duration_s"}.issubset(timeline_columns)
+        if has_render_timeline:
+            mode = "render_timeline"
+        elif prompt_timing_columns.issubset(timeline_columns) and (has_tc_timing or has_sec_timing):
             mode = "prompt_timeline"
-        if mode == "prompt_timeline":
-            required = {"audio_start_sec", "audio_end_sec", "display_duration_sec"}
+        if mode == "render_timeline":
+            if "scene" not in timeline_columns:
+                raise HTTPException(400, "Timeline render cần có các cột scene, render_id, start_tc, end_tc, duration_s.")
+        elif mode == "prompt_timeline":
+            required = {"audio_start_sec", "audio_end_sec"}
+            if not (has_tc_timing or has_sec_timing):
+                required.add("display_duration_sec")
             if not required.issubset(timeline_columns) or not ({"video_file", "source_file"} & timeline_columns):
-                raise HTTPException(400, "Timeline mới cần audio_start_sec, audio_end_sec, display_duration_sec và video_file hoặc source_file.")
+                raise HTTPException(400, "Timeline mới cần audio_start_sec, audio_end_sec, bộ start_tc/end_tc/duration_s (hoặc display_duration_sec), và video_file hoặc source_file.")
         elif not {"segment", "scene_start", "scene_end"}.issubset(rows[0]):
             raise HTTPException(400, "timeline.csv cần có các cột segment, scene_start, scene_end.")
-        if mode == "prompt_timeline":
+        if mode != "render_timeline" and not audio_dir:
+            raise HTTPException(400, "Luồng ghép này cần có thư mục audio/.")
+        if mode in {"prompt_timeline", "render_timeline"}:
             total_clips = len(rows)
         else:
             total_clips = sum(int(row["scene_end"]) - int(row["scene_start"]) + 1 for row in rows)
         update_job(progress=2, stage="probe", total=total_clips, completed=0)
         audio_files = {}
-        for name in os.listdir(audio_dir):
+        for name in (os.listdir(audio_dir) if audio_dir else []):
             match = re.match(r"^(\d+)(?:[_. -].*)?\.(mp3|wav|m4a|aac|ogg|flac)$", name, re.I)
             if match:
                 audio_files[int(match.group(1))] = os.path.join(audio_dir, name)
@@ -1979,11 +2068,19 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
                 try:
                     audio_start = float(row["audio_start_sec"])
                     audio_end = float(row["audio_end_sec"])
-                    display_duration = float(row["display_duration_sec"])
-                    source_in = float(row.get("source_in_sec") or 0)
+                    if has_tc_timing:
+                        source_in = _timeline_timecode(row["start_tc"])
+                        source_end = _timeline_timecode(row["end_tc"])
+                        display_duration = float(row["duration_s"])
+                    else:
+                        source_in = float(row.get("source_in_sec") or 0)
+                        source_end = None
+                        display_duration = float(row["display_duration_sec"])
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"Thời gian không hợp lệ ở dòng timeline {idx + 1}.")
-                if audio_start < 0 or source_in < 0 or audio_end <= audio_start or display_duration <= 0:
+                if (audio_start < 0 or source_in < 0 or audio_end <= audio_start or display_duration <= 0
+                        or (source_end is not None and
+                            (source_end <= source_in or display_duration > source_end - source_in + 0.05))):
                     raise HTTPException(400, f"Khoảng thời gian không hợp lệ ở dòng timeline {idx + 1}.")
                 video_value = row.get("video_file") or row.get("source_file") or ""
                 try:
@@ -2028,6 +2125,43 @@ def assemble_video(files: list[UploadFile] = File(...), job_id: str = Form(...),
                 run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
                 if run.returncode:
                     raise HTTPException(500, f"Không xử lý được prompt {idx}: {run.stderr[-1200:]}")
+                intermediates.append(piece)
+                completed_clips += 1
+                update_job(progress=min(94, 4 + int(90 * completed_clips / max(1, total_clips))),
+                           stage="encode", completed=completed_clips, total=total_clips)
+        elif mode == "render_timeline":
+            for idx, row in enumerate(rows, 1):
+                try:
+                    render_id = int(str(row.get("render_id") or "").strip())
+                    source_in = _timeline_timecode(row.get("start_tc", ""))
+                    source_end = _timeline_timecode(row.get("end_tc", ""))
+                    duration = float(row.get("duration_s") or 0)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"Thời gian hoặc render_id không hợp lệ ở dòng timeline {idx + 1}.")
+                if render_id <= 0 or source_in < 0 or source_end <= source_in or duration <= 0 \
+                        or duration > source_end - source_in + 0.05:
+                    raise HTTPException(400, f"Khoảng thời gian hoặc render_id không hợp lệ ở dòng timeline {idx + 1}.")
+                source = video_files.get(render_id)
+                if not source:
+                    raise HTTPException(400, f"Không tìm thấy video {render_id:03d}.mp4 tương ứng render_id ở dòng timeline {idx + 1}.")
+                piece = os.path.join(work, f"render-{idx:05d}.mp4")
+                cmd = [ffmpeg, "-y", "-i", source]
+                if source_has_audio.get(source, False):
+                    audio_map = "0:a:0"
+                    audio_filter = ["-af", "apad"]
+                else:
+                    cmd.extend(["-f", "lavfi", "-t", f"{duration:.6f}", "-i",
+                                "anullsrc=channel_layout=stereo:sample_rate=48000"])
+                    audio_map = "1:a:0"
+                    audio_filter = []
+                cmd.extend(["-t", f"{duration:.6f}", "-map", "0:v:0", "-map", audio_map,
+                       "-vf", f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height},fps=30,format=yuv420p",
+                       "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                       "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2",
+                       *audio_filter, "-movflags", "+faststart", piece])
+                run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                if run.returncode:
+                    raise HTTPException(500, f"Không ghép được scene {idx:03d}: {run.stderr[-1200:]}")
                 intermediates.append(piece)
                 completed_clips += 1
                 update_job(progress=min(94, 4 + int(90 * completed_clips / max(1, total_clips))),
@@ -2821,7 +2955,6 @@ def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int 
 
 
 _HARVEST_TURN = threading.Lock()
-_RECOVERY_WORKER_LOCK = threading.Lock()
 _HARVEST_NEXT: dict[str, float] = {}
 _HARVEST_MISS: dict[str, int] = {}
 
@@ -2836,24 +2969,19 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False):
     timeout = 60
     lock_timeout = 8 if quick else 120
     account_wait = 8 if quick else 60
-    if not _RECOVERY_WORKER_LOCK.acquire(timeout=lock_timeout):
-        raise MuseGenerationError("Worker lấy video khác đang chạy. Hãy thử lại sau.")
-    try:
-        errors = []
-        for account in accounts:
-            try:
-                return _collect_from_account(
-                    account, muse_url, kind, timeout=timeout,
-                    lock_timeout=lock_timeout, account_wait=account_wait,
-                    expected_duration=_task_video_duration(task)), account
-            except MuseGenerationError as exc:
-                message = str(exc)
-                if "đang bận" in message or "忙" in message:
-                    raise
-                errors.append(message)
-        raise MuseGenerationError(errors[0] if errors else "Không lấy được file đã render.")
-    finally:
-        _RECOVERY_WORKER_LOCK.release()
+    errors = []
+    for account in accounts:
+        try:
+            return _collect_from_account(
+                account, muse_url, kind, timeout=timeout,
+                lock_timeout=lock_timeout, account_wait=account_wait,
+                expected_duration=_task_video_duration(task)), account
+        except MuseGenerationError as exc:
+            message = str(exc)
+            if "đang bận" in message or "忙" in message:
+                raise
+            errors.append(message)
+    raise MuseGenerationError(errors[0] if errors else "Không lấy được file đã render.")
 
 
 def _harvest_ready(task: dict, now: float) -> bool:
@@ -2864,7 +2992,9 @@ def _harvest_ready(task: dict, now: float) -> bool:
     if not _safe_muse_thread(task.get("muse_url")) or not task.get("account"):
         return False
     started_at = task.get("processing_started_at") or task.get("created_at") or 0
-    if now - float(started_at) < 45:
+    # A failed generation is no longer rendering, so check its existing Muse
+    # thread immediately. Keep the grace period only for still-running tasks.
+    if task.get("status") == "processing" and now - float(started_at) < 45:
         return False
     return now >= _HARVEST_NEXT.get(task["id"], 0)
 
@@ -3011,9 +3141,31 @@ async def collect_rendered_task(task_id: str, payload: dict | None = Body(defaul
         task = store.get_task(task_id) or task
     if not _collect_accounts(task.get("account")):
         raise HTTPException(409, "Không còn cookie của tài khoản đã chạy prompt này.")
+    # A status poll can start automatic harvesting at the same time the user
+    # presses the manual recovery button. Join that per-task attempt instead
+    # of returning a misleading duplicate-recovery error.
+    for _ in range(240):
+        with _COLLECTING_LOCK:
+            already_collecting = task_id in _COLLECTING_TASKS
+        if not already_collecting:
+            break
+        await asyncio.sleep(0.5)
+        current = store.get_task(task_id) or {}
+        if current.get("status") in ("completed", "succeeded") and (
+                current.get("url") or (isinstance(current.get("result"), dict)
+                                        and current["result"].get("url"))):
+            return dict(current)
+    else:
+        raise HTTPException(409, "Video này vẫn đang được lấy tự động. Hãy chờ rồi kiểm tra lại.")
+    task = store.get_task(task_id) or task
+    if task.get("status") in ("completed", "succeeded") and (
+            task.get("url") or (isinstance(task.get("result"), dict) and task["result"].get("url"))):
+        return dict(task)
+    if task.get("status") != "failed":
+        raise HTTPException(409, "Tác vụ không còn ở trạng thái lỗi để lấy video.")
     with _COLLECTING_LOCK:
         if task_id in _COLLECTING_TASKS:
-            raise HTTPException(409, "Đang lấy file của tác vụ này.")
+            raise HTTPException(409, "Video này vừa được một lượt khác nhận xử lý. Hãy kiểm tra lại sau.")
         _COLLECTING_TASKS.add(task_id)
 
     def collect():

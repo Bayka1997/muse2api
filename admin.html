@@ -278,8 +278,8 @@
       </div>
       <label style="margin-top:14px">Danh sách prompt</label>
       <div id="batchReferenceField" style="display:none;margin:12px 0">
-        <label>Ảnh tham chiếu dùng chung cho toàn bộ prompt video</label>
-        <input id="batchReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseBatchReference(this)">
+        <label>Ảnh tham chiếu dùng chung cho toàn bộ prompt video (có thể chọn nhiều ảnh)</label>
+        <input id="batchReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple onchange="chooseBatchReference(this)">
         <div id="batchReferencePreview"></div>
         <button id="batchReferenceClear" class="ghost mini" onclick="clearBatchReference()">Bỏ ảnh tham chiếu</button>
         <div class="hint">PNG, JPG hoặc WebP, tối đa 10 MB. Ảnh được giữ cùng đợt chạy để dùng lại khi xử lý video lỗi.</div>
@@ -384,7 +384,7 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
           <option value="segments">Luồng cũ — một audio cho nhiều cảnh</option>
           <option value="prompt_timeline">Luồng mới — nhiều batch audio theo timeline từng prompt</option>
         </select>
-        <div class="hint">Luồng mới dùng audio_start_sec, audio_end_sec và display_duration_sec để căn đoạn audio và thời lượng cảnh; audio_file (nếu có) chọn batch audio, video_file chọn clip video.</div>
+        <div class="hint">Luồng mới nhận audio_start_sec, audio_end_sec, video_file/source_file; thời lượng cảnh có thể dùng display_duration_sec hoặc bộ start_tc, end_tc (HH:MM:SS[.mmm]), duration_s. Cũng nhận timeline scene/render_id/narration_id/audio_batch/video_batch/start_tc/end_tc/duration_s: render_id khớp video đánh số; giữ audio có sẵn trong video, không ghép audio/.</div>
       </div>
       <div class="row" style="align-items:end;margin-top:16px">
         <div style="flex:1;min-width:260px">
@@ -394,6 +394,7 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
           <div id="assemblyFolderName" class="hint">Chưa chọn folder.</div>
         </div>
         <button id="assemblyStart" onclick="startVideoAssembly()">Ghép video và lưu vào output</button>
+        <button type="button" id="assemblySaveOutput" class="ghost" onclick="saveAssemblyOutput()" disabled hidden>Tải/lưu output</button>
         <button type="button" id="assemblyRenameVideos" class="ghost" onclick="renumberAssemblyVideos()" disabled>Đánh số video 001…n</button>
       </div>
       <div id="assemblyStatus" class="hint" aria-live="polite" style="margin-top:12px">Chưa chọn folder.</div>
@@ -966,10 +967,59 @@ async function api(path, opts){
 }
 
 let assemblyProjectHandle = null;
+let assemblyPendingOutput = null;
+let assemblyBusy = false;
+
+function setAssemblyBusy(busy){
+  assemblyBusy=busy;
+  $('assemblyStart').disabled=busy;
+  $('assemblyChooseFolder').disabled=busy;
+  $('assemblySaveOutput').disabled=busy||!assemblyPendingOutput;
+  $('assemblySaveOutput').hidden=!assemblyPendingOutput;
+  updateAssemblyRenameButton();
+}
+
+async function saveAssemblyOutput(){
+  const button=$('assemblySaveOutput'),status=$('assemblyStatus'),progress=$('assemblyProgress');
+  const pending=assemblyPendingOutput;
+  if(!pending||button.disabled)return;
+  setAssemblyBusy(true); progress.style.display='block'; progress.value=90;
+  try{
+    if(pending.projectHandle?.getDirectoryHandle){
+      status.textContent='Đang lưu video vào folder output…';
+      const download=await fetch(pending.download_url);
+      if(!download.ok||!download.body)throw new Error('Không tải được video từ máy chủ.');
+      const total=Number(download.headers.get('Content-Length'))||Number(pending.size)||0;
+      const output=await pending.projectHandle.getDirectoryHandle('output',{create:true});
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+      const outputName=`video-hoan-chinh-${stamp}.mp4`;
+      const outputFile=await output.getFileHandle(outputName,{create:true});
+      const writable=await outputFile.createWritable(),reader=download.body.getReader();
+      let received=0;
+      try{
+        while(true){
+          const {done,value}=await reader.read(); if(done)break;
+          await writable.write(value); received+=value.byteLength;
+          if(total){progress.value=90+Math.floor(10*received/total);status.textContent=`Đang lưu output (${(received/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB)…`;}
+        }
+        await writable.close();
+      }catch(error){await writable.abort().catch(()=>{});throw error;}
+      progress.value=100;
+      status.textContent=`Đã lưu ${outputName} vào ${pending.projectHandle.name}/output (${(Number(pending.size||0)/1048576).toFixed(1)} MB).`;
+    }else{
+      const link=document.createElement('a');link.href=pending.download_url;link.download=pending.filename||'video-hoan-chinh.mp4';
+      document.body.appendChild(link);link.click();link.remove();
+      progress.value=100;status.textContent=`Đã bắt đầu tải output (${(Number(pending.size||0)/1048576).toFixed(1)} MB) vào Downloads.`;
+    }
+    assemblyPendingOutput=null;button.hidden=true;toast('Đã tải/lưu output.','ok');
+  }catch(error){
+    status.textContent='Không tải/lưu được output: '+error.message;toast('Không tải/lưu được output: '+error.message,'error');
+  }finally{setAssemblyBusy(false);}
+}
 
 function updateAssemblyRenameButton(){
   const button=$('assemblyRenameVideos');
-  if(button) button.disabled=!(assemblyProjectHandle && window.showDirectoryPicker);
+  if(button) button.disabled=assemblyBusy||!(assemblyProjectHandle && window.showDirectoryPicker);
 }
 
 async function chooseAssemblyFolder(){
@@ -1066,19 +1116,23 @@ if (!window.showDirectoryPicker) {
 }
 
 async function startVideoAssembly(){
-  const button = $('assemblyStart'), choose = $('assemblyChooseFolder');
   const status = $('assemblyStatus'), progress = $('assemblyProgress');
+  if(assemblyBusy)return;
+  setAssemblyBusy(true);
   let entries = [];
-  if (assemblyProjectHandle) entries = await collectAssemblyFiles(assemblyProjectHandle);
-  else entries = Array.from($('assemblyFolder').files || [])
-    .map(file => ({file, relativePath:file.webkitRelativePath || file.name}))
-    .filter(entry=>isAssemblyRelevantPath(entry.relativePath));
-  if (!entries.length) return toast('Hãy chọn folder dự án trước.', 'warn');
-  if (entries.length > 1000) return toast('Folder có hơn 1000 file; hãy chọn folder gọn hơn.', 'warn');
+  try{
+    if (assemblyProjectHandle) entries = await collectAssemblyFiles(assemblyProjectHandle);
+    else entries = Array.from($('assemblyFolder').files || [])
+      .map(file => ({file, relativePath:file.webkitRelativePath || file.name}))
+      .filter(entry=>isAssemblyRelevantPath(entry.relativePath));
+  }catch(error){setAssemblyBusy(false);return toast('Không đọc được folder dự án: '+error.message,'error');}
+  if (!entries.length){setAssemblyBusy(false);return toast('Hãy chọn folder dự án trước.', 'warn');}
+  if (entries.length > 1000){setAssemblyBusy(false);return toast('Folder có hơn 1000 file; hãy chọn folder gọn hơn.', 'warn');}
+  assemblyPendingOutput=null;$('assemblySaveOutput').hidden=true;
   const projectHandle = assemblyProjectHandle;
   const assemblyJobId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   try { localStorage.setItem('muse2api_assembly_job_v1', assemblyJobId); } catch (_) {}
-  button.disabled = true; choose.disabled = true; progress.style.display = 'block'; progress.value = 5;
+  progress.style.display = 'block'; progress.value = 5;
   status.textContent = `Đang tải ${entries.length} file lên máy chủ…`;
   let pollActive = false;
   try {
@@ -1099,64 +1153,58 @@ async function startVideoAssembly(){
           if(job.status==='processing'){
             progress.value=Math.max(progress.value,Number(job.progress)||1);
             const stages={upload:'Đang tải file lên',probe:'Đang kiểm tra video nguồn',encode:'Đang mã hóa các cảnh', 'audio/concat':'Đang ghép audio và phân cảnh',finalize:'Đang hoàn tất video'};
-            status.textContent=`${stages[job.stage]||'Đang xử lý'} · ${Math.round(Number(job.progress)||1)}%${job.total?` (${job.completed||0}/${job.total} cảnh)`:''}`;
+            if(job.stage==='upload'){
+              const uploaded=Number(job.uploaded)||0, total=Number(job.upload_total)||0;
+              if(total){
+                const percent=Math.min(100,Math.round(uploaded*100/total));
+                status.textContent=`Đang chép file vào máy chủ · ${percent}% (${(uploaded/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB)`;
+              }else if(progress.value>=10){
+                status.textContent='Đã gửi file; máy chủ đang hoàn tất nhận và chuẩn bị xử lý…';
+              }
+              // Keep the browser's XMLHttpRequest upload progress visible until
+              // the server has bytes to report; never replace it with "1%".
+            }else{
+              status.textContent=`${stages[job.stage]||'Đang xử lý'} · ${Math.round(Number(job.progress)||1)}%${job.total?` (${job.completed||0}/${job.total} cảnh)`:''}`;
+            }
           }
         }catch(_){}
         await new Promise(resolve=>setTimeout(resolve,1200));
       }
     })();
-    const response = await fetch('/admin/video-assembly', {method:'POST', headers, body});
-    if (!response.ok) {
-      let message = await response.text();
-      try { const parsed = JSON.parse(message); message = parsed.detail || message; } catch (_) {}
-      throw new Error(message || `HTTP ${response.status}`);
-    }
+    const result = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/admin/video-assembly');
+      Object.entries(headers).forEach(([name, value]) => xhr.setRequestHeader(name, value));
+      xhr.upload.onprogress = event => {
+        if (!event.lengthComputable) return;
+        const percent = Math.min(100, Math.round(event.loaded * 100 / event.total));
+        progress.value = Math.max(progress.value, 1 + Math.round(percent * 0.09));
+        status.textContent = `Đang tải file lên máy chủ · ${percent}% (${(event.loaded / 1048576).toFixed(1)} / ${(event.total / 1048576).toFixed(1)} MB)`;
+      };
+      xhr.onerror = () => reject(new Error('Mất kết nối trong khi tải file lên máy chủ.'));
+      xhr.onabort = () => reject(new Error('Đã hủy tải file lên máy chủ.'));
+      xhr.onload = () => {
+        let payload;
+        try { payload = JSON.parse(xhr.responseText); }
+        catch (_) { payload = {detail: xhr.responseText}; }
+        if (xhr.status < 200 || xhr.status >= 300)
+          return reject(new Error(payload.detail || `HTTP ${xhr.status}`));
+        resolve(payload);
+      };
+      xhr.send(body);
+    });
     progress.value = Math.max(progress.value, 98);
-    const result = await response.json();
     if (!result.download_url) throw new Error('Máy chủ không trả liên kết tải video.');
-    if (projectHandle && projectHandle.getDirectoryHandle) {
-      status.textContent = 'Đã ghép xong; đang lưu video vào folder output…';
-      const download = await fetch(result.download_url);
-      if (!download.ok || !download.body) throw new Error('Không tải được video từ máy chủ.');
-      const total = Number(download.headers.get('Content-Length')) || Number(result.size) || 0;
-      const output = await projectHandle.getDirectoryHandle('output', {create:true});
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const outputName = `video-hoan-chinh-${stamp}.mp4`;
-      const outputFile = await output.getFileHandle(outputName, {create:true});
-      const writable = await outputFile.createWritable();
-      const reader = download.body.getReader();
-      let received = 0;
-      try {
-        while (true) {
-          const {done, value} = await reader.read();
-          if (done) break;
-          await writable.write(value);
-          received += value.byteLength;
-          if (total) {
-            progress.value = 90 + Math.floor(10 * received / total);
-            status.textContent = `Đang tải video về (${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB).`;
-          }
-        }
-        await writable.close();
-      } catch (error) {
-        await writable.abort().catch(() => {});
-        throw error;
-      }
-      progress.value = 100;
-      status.textContent = `Đã ghép và lưu ${outputName} vào ${projectHandle.name}/output (${(Number(result.size || 0) / 1048576).toFixed(1)} MB).`;
-    } else {
-      const link = document.createElement('a');
-      link.href = result.download_url; link.download = result.filename || 'video-hoan-chinh.mp4';
-      document.body.appendChild(link); link.click(); link.remove();
-      progress.value = 100; status.textContent = `Đã ghép xong (${(Number(result.size || 0) / 1048576).toFixed(1)} MB). File đang được tải vào thư mục Downloads.`;
-    }
-    toast('Ghép video hoàn tất.', 'ok');
+    assemblyPendingOutput={...result,projectHandle};
+    const saveButton=$('assemblySaveOutput');saveButton.disabled=false;saveButton.hidden=false;
+    status.textContent='Ghép video hoàn tất; đang tự tải/lưu output…';
+    await saveAssemblyOutput();
   } catch (error) {
     status.textContent = 'Ghép video thất bại: ' + error.message;
     toast('Ghép video thất bại: ' + error.message, 'error');
   } finally {
     pollActive = false;
-    button.disabled = false; choose.disabled = false;
+    setAssemblyBusy(false);
     setTimeout(() => { progress.style.display = 'none'; }, 1200);
   }
 }
@@ -1173,7 +1221,10 @@ async function resumeVideoAssembly(){
       const job=await api('/admin/video-assembly/jobs/'+encodeURIComponent(jobId));
       if(job.status==='completed'){
         progress.value=100;
-        status.innerHTML=`Ghép video đã hoàn tất (${(Number(job.size||0)/1048576).toFixed(1)} MB). <a href="${esc(job.download_url)}" download="${esc(job.filename||'video-hoan-chinh.mp4')}">Tải kết quả</a>`;
+        assemblyPendingOutput={download_url:job.download_url,filename:job.filename,size:job.size,projectHandle:null};
+        const saveButton=$('assemblySaveOutput');saveButton.disabled=false;saveButton.hidden=false;
+        status.textContent='Ghép video đã hoàn tất; đang tự tải output…';
+        await saveAssemblyOutput();
         return;
       }
       if(job.status==='not_found'&&i<20){
@@ -1886,30 +1937,29 @@ async function runVideo(){
 /* ================= Chạy hàng loạt ================= */
 let activeBatch = null;
 let batchDirectory = null;
-let batchReference = null;
+let batchReferences = [];
 let batchReferenceLoading = false;
 let batchReferenceSelection = 0;
 
 async function chooseBatchReference(input){
   if (batchIsBusy()) return;
-  const file = input.files && input.files[0];
-  if (!file) return;
-  if (!['image/png','image/jpeg','image/webp'].includes(file.type) || file.size > 10*1024*1024) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  if (files.some(file => !['image/png','image/jpeg','image/webp'].includes(file.type) || file.size > 10*1024*1024)) {
     input.value='';
-    return toast('Chọn ảnh PNG, JPG hoặc WebP tối đa 10 MB.', 'warn');
+    return toast('Mỗi ảnh phải là PNG, JPG hoặc WebP tối đa 10 MB.', 'warn');
   }
   const selection=++batchReferenceSelection;
   batchReferenceLoading=true;
   try {
-    const data=await new Promise((resolve,reject)=>{
-      const reader=new FileReader();
-      reader.onload=()=>resolve(reader.result);
-      reader.onerror=()=>reject(new Error('Không đọc được ảnh.'));
-      reader.readAsDataURL(file);
-    });
+    const picked=await Promise.all(files.map(file=>new Promise((resolve,reject)=>{
+      const reader=new FileReader(); reader.onload=()=>resolve({data:reader.result,name:file.name});
+      reader.onerror=()=>reject(new Error('Không đọc được ảnh.')); reader.readAsDataURL(file);
+    })));
     if (selection!==batchReferenceSelection) return;
-    batchReference={data,name:file.name};
-    $('batchReferencePreview').innerHTML=`<img src="${esc(data)}" alt="Ảnh tham chiếu" style="max-width:180px;max-height:140px;margin:8px 0"><div>${esc(file.name)}</div>`;
+    batchReferences.push(...picked);
+    $('batchReferencePreview').innerHTML=batchReferences.map(ref=>`<span style="display:inline-flex;flex-direction:column;margin:8px"><img src="${esc(ref.data)}" alt="Ảnh tham chiếu" style="max-width:120px;max-height:100px"><small>${esc(ref.name)}</small></span>`).join('');
+    input.value='';
   } catch(error) { toast(error.message,'warn'); }
   finally { if(selection===batchReferenceSelection) batchReferenceLoading=false; }
 }
@@ -1918,7 +1968,7 @@ function clearBatchReference(){
   if (batchIsBusy()) return;
   batchReferenceSelection++;
   batchReferenceLoading=false;
-  batchReference=null;
+  batchReferences=[];
   $('batchReferenceInput').value='';
   $('batchReferencePreview').innerHTML='';
 }
@@ -1927,24 +1977,25 @@ async function storeBatchReference(batch){
   const opened=await openFolderStore('readwrite');
   if (!opened) throw new Error('Trình duyệt không hỗ trợ lưu ảnh tham chiếu.');
   try {
-    opened.store.put(batch.referenceImage,'reference:'+batch.id);
+    opened.store.put(batch.referenceImages,'reference:'+batch.id);
     await new Promise((resolve,reject)=>{opened.tx.oncomplete=resolve;opened.tx.onerror=()=>reject(new Error('Không lưu được ảnh tham chiếu.'));opened.tx.onabort=()=>reject(new Error('Không lưu được ảnh tham chiếu.'));});
   } finally { opened.db.close(); }
 }
 
 async function readBatchReference(batch){
   if (!batch.hasReference) return null;
-  if (batch.referenceImage) return batch.referenceImage;
+  if (batch.referenceImages) return batch.referenceImages;
+  if (batch.referenceImage) return [batch.referenceImage];
   const opened=await openFolderStore('readonly');
   if (!opened) throw new Error('Không đọc được ảnh tham chiếu đã lưu.');
   try {
-    batch.referenceImage=await new Promise((resolve,reject)=>{
+    batch.referenceImages=await new Promise((resolve,reject)=>{
       const request=opened.store.get('reference:'+batch.id);
       request.onsuccess=()=>resolve(request.result || null);
       request.onerror=()=>reject(new Error('Không đọc được ảnh tham chiếu đã lưu.'));
     });
-    if (!batch.referenceImage) throw new Error('Ảnh tham chiếu đã mất. Hãy chọn lại ảnh và tạo đợt chạy mới.');
-    return batch.referenceImage;
+    if (!batch.referenceImages) throw new Error('Ảnh tham chiếu đã mất. Hãy chọn lại ảnh và tạo đợt chạy mới.');
+    return batch.referenceImages;
   } finally { opened.db.close(); }
 }
 async function readBatchJobReference(batch, job){
@@ -1988,6 +2039,8 @@ let batchNextNumber = 1;
 let batchFilter = 'all';
 let batchRecoveryPolling = false;
 let batchRecoveringVideos = false;
+let batchRecoveryRuns = 0;
+let batchRecoverySlots = 0;
 const BATCH_HISTORY_STORE = 'muse2api_batch_history_v1';
 const batchSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -2425,12 +2478,20 @@ async function checkBatchResult(index){
       job.url = media.url || result.url || ''; job.status = 'completed'; job.progress = 100; job.error = '';
       if (!safeBatchMediaUrl(job.url)) { job.status = 'failed'; job.error = 'Không có liên kết kết quả hợp lệ.'; }
     } else if (['failed','cancelled'].includes(result.status)) {
-      job.status = 'failed'; job.error = result.error || 'Tác vụ thất bại';
+      const media = (result.data && result.data[0]) || result.result || result.video || result;
+      const availableUrl = media.url || result.url || '';
+      if (batch.kind === 'video' && safeBatchMediaUrl(availableUrl)) {
+        job.url = availableUrl; job.status = 'completed'; job.progress = 100; job.error = '';
+      } else {
+        job.status = 'failed'; job.error = result.error || 'Tác vụ thất bại';
+      }
     } else {
-      job.status = ['queued','processing','running'].includes(result.status) ? result.status : 'unconfirmed';
+      const recoveryActive = job.collecting || job.recoveryQueued;
+      if (!(recoveryActive && ['queued','processing','running'].includes(result.status)))
+        job.status = ['queued','processing','running'].includes(result.status) ? result.status : 'unconfirmed';
       job.progress = Number(result.progress) || 0;
       job.elapsed = result.elapsed || 0;
-      job.error = '';
+      if (!recoveryActive) job.error = '';
     }
     if (['completed','failed'].includes(job.status)) job.recovering = false;
   } catch (error) {
@@ -2711,6 +2772,7 @@ function renderBatchJob(batch, job){
       ${canReconnect(job) ? `<button class="ghost mini" onclick="reconnectInterrupted(${job.index})" ${job.reconnecting ? 'disabled' : ''}>${job.reconnecting ? 'Đang nối lại…' : 'Nối lại'}</button>` : ''}
       ${batch.kind === 'video' && ['failed','unconfirmed'].includes(job.status) ? `<button class="ghost mini" onclick="recoverFailedVideos(${job.index})" ${busy || !job.id ? 'disabled' : ''} title="Lấy video từ cuộc trò chuyện cũ">${job.collecting ? 'Đang lấy video…' : 'Lấy lại video'}</button>` : canCollectRendered(job) ? `<button class="ghost mini" onclick="collectRenderedJob(${job.index})" ${busy ? 'disabled' : ''}>${job.collecting ? 'Đang lấy file…' : 'Lấy ảnh đã render'}</button>` : ''}
       ${job.editing ? '' : `<button class="ghost mini" onclick="startBatchPromptEdit(${job.index})" title="Sửa nội dung prompt rồi đưa vào hàng chờ">Sửa prompt</button>`}
+      ${batch.kind === 'video' && job.status !== 'completed' && url ? `<button class="ghost mini" onclick="markBatchVideoCompleted(${job.index})" title="Chuyển video có file sang nhóm Hoàn thành">Hoàn thành</button>` : ''}
       ${['submitting','queued','processing','running'].includes(job.status) ? `<button class="ghost mini" onclick="cancelBatchJobToUnsent(${job.index})" title="Hủy tác vụ này; prompt được giữ lại để xếp hàng lại sau">${job.cancelling ? 'Đang hủy…' : 'Hủy, để gửi lại sau'}</button>` : ''}
       <button class="ghost mini" onclick="retryBatchJob(${job.index})" title="Tạo lại tại STT này; nếu tác vụ cũ đang chạy, hủy tác vụ đó trước.">Tạo lại</button>
       ${url ? `<a class="badge info" href="${esc(url)}" target="_blank" rel="noopener">Mở</a><button class="ghost mini" onclick="retryBatchSave(${job.index})" ${job.saveState === 'saving' || job.saveState === 'saved' ? 'disabled' : ''}>${job.saveState === 'failed' ? 'Lưu lại' : 'Tải xuống'}</button>` : ''}
@@ -2724,7 +2786,18 @@ function renderBatchJob(batch, job){
 }
 
 function batchEntries(){ return batchHistory.flatMap(batch => batch.jobs.map(job => ({batch,job}))); }
+function markBatchVideoCompleted(index){
+  const batch = batchHistory.find(item => item.kind === 'video' && item.jobs.some(job => job.index === index));
+  const job = batch && batch.jobs.find(item => item.index === index);
+  if (!job || !safeBatchMediaUrl(job.url)) return;
+  job.status = 'completed'; job.progress = 100; job.error = '';
+  delete job.collecting; delete job.recoveryQueued; delete job.preparing;
+  persistBatchHistory(); renderBatchJob(batch, job);
+}
 function matchesBatchFilter(job, filter){
+  // Recovery temporarily moves failed rows into the active sending view.
+  if (job.collecting || job.recoveryQueued) return filter === 'all' || filter === 'sending';
+  if (filter === 'failed' && ['failed','unconfirmed'].includes(job.status)) return true;
   if (job.status === 'completed' || job.status === 'succeeded') {
     return filter === 'all' || filter === 'completed' || (filter === 'failed' && job.saveState === 'failed');
   }
@@ -2855,13 +2928,15 @@ function canCollectRendered(job){
 }
 
 function canRecoverFailedVideo(batch, job){
-  return batch.kind === 'video' && ['failed','unconfirmed'].includes(job.status) && !!job.id;
+  return batch.kind === 'video' && ['failed','unconfirmed'].includes(job.status) && !!job.id
+    && !job.recoveryQueued && !job.collecting;
 }
 
 async function recoverFailedVideos(index){
-  if (batchRecoveringVideos || batchRestarting) return;
+  if (batchRestarting) return toast('Đang khởi động lại tác vụ. Hãy chờ hoàn tất rồi thử lại.', 'warn');
   const entries = batchEntries().filter(({batch,job}) => canRecoverFailedVideo(batch,job) && (index == null || job.index === index));
   if (!entries.length) return toast('Không có video lỗi có mã tác vụ để lấy lại.', 'warn');
+  batchRecoveryRuns++;
   batchRecoveringVideos = true;
   for (const {batch,job} of entries) {
     job.recoveryQueued = true;
@@ -2869,53 +2944,69 @@ async function recoverFailedVideos(index){
   }
   setBatchFilter('sending');
   updateBatchListControls();
-  toast(`Đang lấy lại ${entries.length} video từ cuộc trò chuyện cũ…`);
   let saved = 0;
   try {
-  for (const {batch,job} of entries) {
-    while (job.checking || job.collecting) await new Promise(resolve => setTimeout(resolve, 250));
-    if (job.status === 'completed') {
-      delete job.recoveryQueued;
-      renderBatchJob(batch,job);
-      if (!['saved','browserRequested'].includes(job.saveState)) await retryBatchSave(job.index);
-      saved++; continue;
-    }
-    const previousStatus = job.status, previousError = job.error;
-    job.collecting = true;
-    renderBatchJob(batch,job);
-    try {
-      const result = await api('/admin/tasks/' + encodeURIComponent(job.id) + '/collect', {
-        method:'POST', body:JSON.stringify({muse_url:safeMuseThreadUrl(job.museUrl) || ''})
-      });
-      const media = (result.data && result.data[0]) || result.result || result.video || result;
-      if (['completed','succeeded'].includes(result.status) && safeBatchMediaUrl(media.url || result.url || '')) {
-        applyCollectedTask(batch,job,result);
-        saved++;
-      } else throw new Error(result.error || 'Chưa lấy được video.');
-    } catch (error) {
-      job.status = previousStatus;
-      job.error = previousError;
-      job.reconnectNote = 'Lấy lại video chưa thành công: ' + uiText(error.message);
-    } finally {
-      delete job.collecting;
-      delete job.recoveryQueued;
-      renderBatchJob(batch,job);
-    }
-    if (job.status === 'completed' && !['saved','browserRequested'].includes(job.saveState)) {
-      await retryBatchSave(job.index);
-    }
-  }
+    let nextEntry = 0;
+    const recoverWorker = async () => {
+      while (nextEntry < entries.length) {
+        const {batch,job} = entries[nextEntry++];
+        while (batchRecoverySlots >= batchParallelLimit()) await batchSleep(100);
+        batchRecoverySlots++;
+        try {
+          while (job.checking || job.collecting) await new Promise(resolve => setTimeout(resolve, 250));
+          if (job.status === 'completed') {
+            delete job.recoveryQueued;
+            renderBatchJob(batch,job);
+            if (!['saved','browserRequested'].includes(job.saveState)) await retryBatchSave(job.index);
+            saved++; continue;
+          }
+          const previousStatus = job.status, previousError = job.error;
+          job.collecting = true;
+          renderBatchJob(batch,job);
+          try {
+            const result = await api('/admin/tasks/' + encodeURIComponent(job.id) + '/collect', {
+              method:'POST', body:JSON.stringify({muse_url:safeMuseThreadUrl(job.museUrl) || ''})
+            });
+            const media = (result.data && result.data[0]) || result.result || result.video || result;
+            if (['completed','succeeded'].includes(result.status) && safeBatchMediaUrl(media.url || result.url || '')) {
+              applyCollectedTask(batch,job,result);
+              saved++;
+            } else throw new Error(result.error || 'Chưa lấy được video.');
+          } catch (error) {
+            job.status = previousStatus;
+            job.error = previousError;
+            job.reconnectNote = 'Lấy lại video chưa thành công: ' + uiText(error.message);
+          } finally {
+            delete job.collecting;
+            delete job.recoveryQueued;
+            renderBatchJob(batch,job);
+          }
+          if (job.status === 'completed' && !['saved','browserRequested'].includes(job.saveState)) {
+            await retryBatchSave(job.index);
+          }
+        } finally {
+          batchRecoverySlots = Math.max(0, batchRecoverySlots - 1);
+        }
+      }
+    };
+    const concurrency = Math.min(entries.length, Math.max(1, batchParallelLimit()));
+    await Promise.all(Array.from({length:concurrency}, () => recoverWorker()));
   } finally {
     for (const {batch,job} of entries) {
       delete job.recoveryQueued;
       renderBatchJob(batch,job);
     }
-    batchRecoveringVideos = false;
-    setBatchFilter(saved ? 'completed' : 'failed');
+    batchRecoveryRuns = Math.max(0, batchRecoveryRuns - 1);
+    batchRecoveringVideos = batchRecoveryRuns > 0;
+    const remainingFailures = batchEntries().some(({batch,job}) => batch.kind === 'video'
+      && ['failed','unconfirmed'].includes(job.status) && !!job.id);
+    setBatchFilter(batchRecoveryRuns > 0 ? 'sending'
+      : (remainingFailures ? 'failed' : (saved ? 'completed' : 'failed')));
     persistBatchHistory();
     updateBatchListControls();
   }
-  toast(`Đã lấy lại ${saved}/${entries.length} video. Các video chưa lấy được vẫn ở danh sách Lỗi.`, saved === entries.length ? 'ok' : 'warn');
+  if (saved > 0 || entries.length > 1)
+    toast(`Đã lấy lại ${saved}/${entries.length} video. Các video chưa lấy được vẫn ở danh sách Lỗi.`, saved === entries.length ? 'ok' : 'warn');
 }
 
 function jobWasInterrupted(job){
@@ -3211,8 +3302,10 @@ async function processBatchJob(batch, job, runner, accountId){
   // one account can keep that account busy while other enabled accounts sit idle.
   if (batch.kind === 'video') body.duration = batch.duration;
   try {
-    if (batch.kind === 'video' && (batch.hasReference || job.referenceOverride))
-      body.reference_image=await readBatchJobReference(batch,job);
+    if (batch.kind === 'video' && (batch.hasReference || job.referenceOverride)) {
+      const refs=await readBatchJobReference(batch,job);
+      body.reference_images=Array.isArray(refs)?refs:[refs];
+    }
   } catch(error) {
     job.status='failed';job.error='MUSE_ACTION_REQUIRED: '+error.message;
     renderBatchJob(batch,job);
@@ -3375,9 +3468,9 @@ async function runBatch(){
     id:'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2),
     kind, size:$('batchSize').value, duration:Number($('batchDuration').value) || 10,
     concurrency:batchParallelLimit(),
-    hasReference:kind==='video' && !!batchReference,
-    referenceImage:kind==='video' && batchReference ? batchReference.data : null,
-    referenceName:kind==='video' && batchReference ? batchReference.name : '',
+    hasReference:kind==='video' && batchReferences.length>0,
+    referenceImages:kind==='video' && batchReferences.length ? batchReferences.slice() : null,
+    referenceName:kind==='video' ? batchReferences.map(ref=>ref.name).join(', ') : '',
     jobs:prompts.map((prompt, offset) => ({prompt, index:batchNextNumber - 1 + offset, status:'waiting', progress:0, createdAt:Math.floor(Date.now()/1000)})),
     stop:false, running:true, next:0, directory:batchDirectory,
   };

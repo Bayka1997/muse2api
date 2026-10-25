@@ -1352,29 +1352,28 @@ class MuseEngine:
         except Exception:
             pass
 
-    def _attach_image(self, image_data: str):
+    def _attach_image(self, image_data: str | list[str]):
         """将参考图通过 DataTransfer 附加到输入框，杜绝使用旧历史图片。"""
         if not image_data:
             return
-        b64, mime = self._normalize_image(image_data)
-        if not b64:
+        image_data = image_data if isinstance(image_data, list) else [image_data]
+        images = [self._normalize_image(item) for item in image_data if item]
+        if not images or any(not b64 for b64, _mime in images):
             raise MuseGenerationError("参考图读取失败，已停止生成")
 
         self._clear_attachments()
 
         _INJECT_JS = """
-        (function(b64, mime) {
+        (function(images) {
             try {
-                var byteChars = atob(b64);
-                var byteNumbers = new Array(byteChars.length);
-                for (var i = 0; i < byteChars.length; i++) {
-                    byteNumbers[i] = byteChars.charCodeAt(i);
-                }
-                var byteArray = new Uint8Array(byteNumbers);
-                var blob = new Blob([byteArray], {type: mime});
-                var ext = mime.split('/')[1] || 'png';
-                if (ext === 'jpeg') ext = 'jpg';
-                var file = new File([blob], 'reference_image.' + ext, {type: mime});
+                var files = images.map(function(item, index) {
+                    var byteChars = atob(item[0]);
+                    var byteNumbers = new Array(byteChars.length);
+                    for (var i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+                    var blob = new Blob([new Uint8Array(byteNumbers)], {type: item[1]});
+                    var ext = item[1].split('/')[1] || 'png'; if (ext === 'jpeg') ext = 'jpg';
+                    return new File([blob], 'reference_image_' + (index + 1) + '.' + ext, {type: item[1]});
+                });
                 // 现网 composer 里可能有多个 file input；优先取位于 composer 内的那个
                 var inputs = Array.from(document.querySelectorAll('input[type="file"]'));
                 if (!inputs.length) return JSON.stringify({ok: false, err: 'no-file-input'});
@@ -1393,7 +1392,7 @@ class MuseEngine:
                 // 有些版本 accept 为空，补上 image/* 让页面接受本次 File
                 if (!input.getAttribute('accept')) input.setAttribute('accept', 'image/*');
                 var dt = new DataTransfer();
-                dt.items.add(file);
+                files.forEach(function(file){ dt.items.add(file); });
                 input.files = dt.files;
                 input.dispatchEvent(new Event('change', {bubbles: true}));
                 input.dispatchEvent(new Event('input', {bubbles: true}));
@@ -1401,10 +1400,10 @@ class MuseEngine:
             } catch(e) {
                 return JSON.stringify({ok: false, err: String(e)});
             }
-        })(%s, %s)
+        })(%s)
         """
         try:
-            raw_res = self.page.js(_INJECT_JS % (json.dumps(b64), json.dumps(mime)))
+            raw_res = self.page.js(_INJECT_JS % json.dumps(images))
             res_obj = json.loads(raw_res) if isinstance(raw_res, str) else raw_res
             if not res_obj.get("ok"):
                 detail = str(res_obj.get("err") or "unknown uploader error")
