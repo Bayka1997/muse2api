@@ -47,6 +47,7 @@ from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from config import CFG
@@ -71,6 +72,8 @@ app = FastAPI(title="muse2api", version="1.5.4")
 _ASSEMBLY_DOWNLOAD_LOCK = threading.Lock()
 _ASSEMBLY_DOWNLOADS: dict[str, tuple[str, float]] = {}
 _ASSEMBLY_JOBS: dict[str, dict] = {}
+_MUSIC_ASSEMBLY_OUTPUTS: dict[str, tuple[str, float]] = {}
+_VIDEO_TRANSITION_SECONDS = 0.5
 
 
 def _assembly_state_path(kind: str, key: str) -> str | None:
@@ -258,8 +261,11 @@ class AccountPoolManager:
                     if chosen:
                         acc = self.store.pick_account(
                             preferred_id=chosen, rotate=False, force_rotate=False, record_use=record_use)
-                        if not acc or acc["id"] != chosen:
-                            acc = self.store.get_account(chosen)
+                        # The selected account may have been disabled between
+                        # _choose() and pick_account(). Never fall back to a
+                        # direct lookup here, because that can return a disabled
+                        # account from the earlier snapshot. Re-read the enabled
+                        # pool on the next loop instead.
                         if acc and self._slots(acc["id"]) < self.per_account:
                             self._take(acc["id"])
                             return acc
@@ -647,6 +653,15 @@ class AccountPatch(BaseModel):
 
 class AccountOrderRequest(BaseModel):
     ids: list[str]
+
+
+class AccountRuleRequest(BaseModel):
+    ids: list[str]
+    rule: str
+
+
+class AccountChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(default_factory=list)
 
 
 # ------------------------- 提示词构造 -------------------------
@@ -1890,12 +1905,20 @@ def _ffmpeg_executable() -> str:
 
 def _ffmpeg_duration(ffmpeg: str, path: str) -> float:
     import subprocess
-    result = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True,
+    result = subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-i", path], capture_output=True, text=True,
                             encoding="utf-8", errors="replace")
-    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
+    return _parse_ffmpeg_duration(result.stderr, path, account_for_start=True)
+
+
+def _parse_ffmpeg_duration(stderr: str, path: str, account_for_start: bool = False) -> float:
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr)
     if not match:
         raise ValueError(f"Không đọc được thời lượng audio: {os.path.basename(path)}")
-    return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+    duration = int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+    start = re.search(r"Duration:.*?start:\s*(-?\d+(?:\.\d+)?)", stderr, re.S)
+    if account_for_start and start:
+        duration -= max(0.0, float(start.group(1)))
+    return duration
 
 
 def _timeline_timecode(value: str) -> float:
@@ -1910,6 +1933,342 @@ def _timeline_timecode(value: str) -> float:
         raise ValueError("timecode phải có dạng HH:MM:SS[.mmm]")
     hours, minutes, seconds = parts
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+@app.post("/admin/audio-video-assembly")
+def assemble_audio_video(files: list[UploadFile] = File(...), gap_seconds: float = Form(0.5),
+                         transition_enabled: bool = Form(True), reserve_effect_time: bool = Form(False),
+                         aspect_ratio: str = Form("16:9"),
+                         job_id: str = Form(""), _=Depends(auth)):
+    """Join numbered audio/video pairs and return preview/download URLs."""
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import PurePosixPath
+
+    if len(files) > 2000:
+        raise HTTPException(413, "Thư mục có quá nhiều tệp (tối đa 2000).")
+    try:
+        gap = float(gap_seconds)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Khoảng nghỉ không hợp lệ.")
+    if not 0 <= gap <= 30:
+        raise HTTPException(400, "Khoảng nghỉ phải từ 0 đến 30 giây.")
+    aspect_ratio = (aspect_ratio or "16:9").strip()
+    if aspect_ratio not in ("16:9", "9:16"):
+        raise HTTPException(400, "Tỉ lệ video phải là 16:9 hoặc 9:16.")
+    work = tempfile.mkdtemp(prefix="muse-audio-video-", dir=CFG.data_dir)
+    audio_exts = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac")
+    video_exts = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+    stage = "sao ch?p t?p l?n m?y ch?"
+    music_job_key = "music-" + (job_id or uuid.uuid4().hex)
+
+    def update_music_job(**values):
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            current = _ASSEMBLY_JOBS.setdefault(music_job_key, {"status": "processing", "started_at": time.time()})
+            current.update(values, updated_at=time.time())
+            _write_assembly_state("jobs", music_job_key, current)
+
+    update_music_job(status="processing", progress=1, stage="upload")
+    try:
+        for upload in files:
+            rel = PurePosixPath((upload.filename or "").replace("\\", "/"))
+            if rel.is_absolute() or ".." in rel.parts:
+                upload.file.close()
+                continue
+            parts={part.casefold() for part in rel.parts}
+            suffix=rel.suffix.casefold()
+            is_audio="audios" in parts and suffix in audio_exts
+            is_video="videos" in parts and suffix in video_exts
+            if not (is_audio or is_video):
+                upload.file.close()
+                continue
+            target = os.path.join(work, *rel.parts)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as out:
+                shutil.copyfileobj(upload.file, out)
+            upload.file.close()
+        audio_dir = next((os.path.join(root, d) for root, dirs, _ in os.walk(work) for d in dirs if d.lower() == "audios"), None)
+        video_dir = next((os.path.join(root, d) for root, dirs, _ in os.walk(work) for d in dirs if d.lower() == "videos"), None)
+        if not audio_dir or not video_dir:
+            raise HTTPException(400, "Th\u01b0 m\u1ee5c d\u1ef1 \u00e1n c\u1ea7n c\u00f3 hai th\u01b0 m\u1ee5c con audios/ v\u00e0 videos/.")
+        natural = lambda path: [int(x) if x.isdigit() else x.casefold() for x in re.split(r"(\d+)", os.path.basename(path))]
+        audios = sorted([os.path.join(r, n) for r, _, ns in os.walk(audio_dir) for n in ns if n.lower().endswith(audio_exts)], key=natural)
+        videos = sorted([os.path.join(r, n) for r, _, ns in os.walk(video_dir) for n in ns if n.lower().endswith(video_exts)], key=natural)
+        if not audios or len(audios) != len(videos):
+            raise HTTPException(400, "Cần có số lượng audio và video bằng nhau, tối thiểu một cặp.")
+        stage = "kiểm tra tệp audio"
+        ffmpeg = _ffmpeg_executable()
+        # Header-only probes are independent; a bounded pool reduces process
+        # startup latency without competing with the later high-resolution encode.
+        with ThreadPoolExecutor(max_workers=min(8, len(audios))) as pool:
+            durations = list(pool.map(lambda path: _ffmpeg_duration(ffmpeg, path), audios))
+        if any(d <= 0 for d in durations):
+            raise HTTPException(400, "Có audio không đọc được hoặc bị rỗng.")
+        # Audio concat with explicit silent gaps.
+        audio_inputs = []
+        for i, path in enumerate(audios):
+            audio_inputs += ["-i", path]
+            if gap and i < len(audios) - 1:
+                audio_inputs += ["-f", "lavfi", "-t", f"{gap:.6f}", "-i", "anullsrc=r=48000:cl=stereo"]
+        a_filters=[]; a_labels=[]; input_idx=0
+        for i, dur in enumerate(durations):
+            label=f"a{i}"; a_filters.append(f"[{input_idx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,atrim=duration={dur:.6f},asetpts=PTS-STARTPTS[{label}]");a_labels.append(f"[{label}]");input_idx+=1
+            if gap and i<len(durations)-1:
+                label=f"g{i}";a_filters.append(f"[{input_idx}:a]atrim=duration={gap:.6f},asetpts=PTS-STARTPTS[{label}]");a_labels.append(f"[{label}]");input_idx+=1
+        a_filters.append("".join(a_labels)+f"concat=n={len(a_labels)}:v=0:a=1[aout]")
+        audio_out=os.path.join(work,"long-audio.mp3")
+        audio_graph=os.path.join(work,"audio-filter.txt")
+        with open(audio_graph,"w",encoding="ascii",newline="\n") as graph_file:
+            graph_file.write(";".join(a_filters))
+        stage="ghép audio"
+        run=subprocess.run([ffmpeg,"-y",*audio_inputs,"-filter_complex_script",audio_graph,"-map","[aout]","-c:a","libmp3lame","-q:a","2",audio_out],capture_output=True,text=True,encoding="utf-8",errors="replace")
+        if run.returncode: raise RuntimeError("Không ghép được audio: "+run.stderr[-1800:])
+        stage="kiểm tra video nguồn"
+        # Normalize each paired video, then composite later clips over earlier
+        # ones with an alpha crossfade on the audio-aligned timeline.
+        v_inputs=[];v_filters=[];video_specs=[];audio_filters=[];video_audio_labels=[]
+        def probe_video(path):
+            return subprocess.run([ffmpeg,"-nostdin","-hide_banner","-i",path],capture_output=True,text=True,encoding="utf-8",errors="replace").stderr
+
+        with ThreadPoolExecutor(max_workers=min(8, len(videos))) as pool:
+            video_probes = list(pool.map(probe_video, videos))
+        source_durations=[]
+        for i,(path,dur,probe_text) in enumerate(zip(videos,durations,video_probes)):
+            v_inputs += ["-i",path]
+            spec=re.search(r"Video:.*?(\d{2,5})x(\d{2,5}),.*?(\d+(?:\.\d+)?) fps",probe_text,re.S)
+            if not spec: raise HTTPException(400,f"Không đọc được độ phân giải/FPS video: {os.path.basename(path)}")
+            has_audio=bool(re.search(r"Audio:",probe_text))
+            video_specs.append((int(spec.group(1)),int(spec.group(2)),float(spec.group(3)),has_audio))
+            source_durations.append(max(0.04,_parse_ffmpeg_duration(probe_text,path)))
+        # Use a consistent 4K/60 output profile so the per-scene files can be
+        # concatenated with stream copy. Lower-resolution sources are upscaled.
+        # Fixed 4K60 profile requested for the new audio/video workflow.
+        target_width,target_height,target_fps = (3840,2160,60) if aspect_ratio == "16:9" else (2160,3840,60)
+        reserved_tail=_VIDEO_TRANSITION_SECONDS if reserve_effect_time and not transition_enabled else 0.0
+        video_duration=sum(durations)+gap*(len(durations)-1)+reserved_tail*len(durations)
+        audio_starts=[]
+        elapsed_audio=0.0
+        for i,dur in enumerate(durations):
+            audio_starts.append(elapsed_audio)
+            elapsed_audio += dur+(gap if i<len(durations)-1 else 0)
+        for i,(path,dur,source_duration) in enumerate(zip(videos,durations,source_durations)):
+            # Extend each non-final scene through its matching audio gap. The
+            # next scene's fade starts before its audio, so that overlap is
+            # included in the scene timeline rather than appended to the file.
+            scene_duration=dur+(gap if i<len(videos)-1 else 0)+reserved_tail
+            stretch=max(1.0,scene_duration/source_duration)
+            common=f"[{i}:v]setpts=PTS-STARTPTS,scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS*{stretch:.8f},trim=duration={scene_duration:.6f},fps={target_fps},format=yuva420p,settb=1/{target_fps}"
+            if video_specs[i][3]:
+                tempo=1.0/stretch
+                tempo_filters=[]
+                while tempo<0.5:
+                    tempo_filters.append("atempo=0.5")
+                    tempo/=0.5
+                if abs(tempo-1.0)>1e-7:
+                    tempo_filters.append(f"atempo={tempo:.8f}")
+                tempo_chain=(",".join(tempo_filters)+",") if tempo_filters else ""
+                audio_filters.append(f"[{i}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,{tempo_chain}apad,atrim=duration={scene_duration:.6f},asetpts=PTS-STARTPTS[va{i}]")
+            else:
+                audio_filters.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={scene_duration:.6f}[va{i}]")
+            video_audio_labels.append(f"[va{i}]")
+            if not transition_enabled:
+                v_filters.append(common+f",setpts=PTS-STARTPTS[v{i}]")
+            elif i==0:
+                tail=max(0.0,video_duration-scene_duration)
+                v_filters.append(common+f",tpad=stop_mode=clone:stop_duration={tail:.6f},setpts=PTS-STARTPTS[v{i}]")
+            else:
+                # Give the next scene a transparent lead-in, then start its
+                # moving content exactly when its paired audio begins. The old
+                # scene remains underneath during the dissolve.
+                tail=max(0.0,video_duration-audio_starts[i]-scene_duration)
+                transition=_VIDEO_TRANSITION_SECONDS
+                shift=max(0.0,audio_starts[i]-transition)
+                v_filters.append(common+f",tpad=start_duration={transition:.6f}:start_mode=clone,setpts=PTS-STARTPTS,fps={target_fps},fade=t=in:st=0:d={transition:.6f}:alpha=1,tpad=stop_mode=clone:stop_duration={tail:.6f},setpts=PTS+{shift:.6f}/TB[v{i}]")
+        gpu_filters=[]
+        if transition_enabled:
+            # Keep the existing CPU graph as a fallback. CUDA uploads the
+            # timed/alpha-prepared scenes, then blends them with one worker.
+            scene_filters=list(v_filters)
+            for i,filter_line in enumerate(scene_filters):
+                label=f"[v{i}]"
+                if filter_line.endswith(label):
+                    upload_format=",format=yuv420p,hwupload" if i==0 else ",hwupload"
+                    filter_line=filter_line[:-len(label)]+upload_format+label
+                gpu_filters.append(filter_line)
+            current="v0"
+            for i in range(1,len(videos)):
+                out=f"ov{i}"
+                v_filters.append(f"[{current}][v{i}]overlay=x=0:y=0:eof_action=pass:shortest=0:repeatlast=0:format=auto[{out}]")
+                gpu_filters.append(f"[{current}][v{i}]overlay_cuda=x=0:y=0:eof_action=pass:shortest=0:repeatlast=0[{out}]")
+                current=out
+            v_filters.append(f"[{current}]fps={target_fps},format=yuv420p,settb=1/{target_fps}[vout]")
+            gpu_filters.append(f"[{current}]null[vout]")
+            audio_concat="".join(video_audio_labels)+f"concat=n={len(video_audio_labels)}:v=0:a=1[vaout]"
+            v_filters.append(audio_concat)
+            gpu_filters.append(audio_concat)
+        else:
+            # Without transitions, clips have identical normalized geometry
+            # and matching audio/video durations, so concatenate sequentially.
+            concat_inputs=[]
+            for i in range(len(videos)):
+                flat=f"cv{i}"
+                v_filters.append(f"[v{i}]format=yuv420p[{flat}]")
+                concat_inputs.extend([f"[{flat}]",f"[va{i}]"])
+            v_filters.append("".join(concat_inputs)+f"concat=n={len(videos)}:v=1:a=1[vout][vaout]")
+        video_out=os.path.join(work,"joined-video.mp4")
+        video_graph=os.path.join(work,"video-filter.txt")
+        with open(video_graph,"w",encoding="ascii",newline="\n") as graph_file:
+            graph_file.write(";".join(v_filters))
+        gpu_video_graph=os.path.join(work,"video-filter-cuda.txt")
+        if transition_enabled:
+            with open(gpu_video_graph,"w",encoding="ascii",newline="\n") as graph_file:
+                graph_file.write(";".join(gpu_filters))
+        stage="ghép video"
+        cpu_cmd=[ffmpeg,"-y","-filter_complex_threads","2",*v_inputs,"-filter_complex_script",video_graph,"-map","[vout]","-map","[vaout]","-t",f"{video_duration:.6f}"]
+        audio_output=["-c:a","aac","-b:a","192k","-movflags","+faststart",video_out]
+        if transition_enabled:
+            gpu_cmd=[ffmpeg,"-y","-filter_complex_threads","1","-init_hw_device","cuda=assembly_gpu:0","-filter_hw_device","assembly_gpu",*v_inputs,"-filter_complex_script",gpu_video_graph,"-map","[vout]","-map","[vaout]","-t",f"{video_duration:.6f}"]
+            log.info("Trying CUDA scene composition with one filter worker and NVIDIA NVENC.")
+            run=subprocess.run([*gpu_cmd,"-c:v","h264_nvenc","-gpu","0","-preset","p1","-rc","vbr","-cq","20","-b:v","0",*audio_output],capture_output=True,text=True,encoding="utf-8",errors="replace")
+            if run.returncode:
+                log.warning("CUDA composition/encoding failed; retrying with CPU video filters: %s",run.stderr[-1200:])
+                run=subprocess.run([*cpu_cmd,"-c:v","h264_nvenc","-gpu","0","-preset","p1","-rc","vbr","-cq","20","-b:v","0",*audio_output],capture_output=True,text=True,encoding="utf-8",errors="replace")
+            if run.returncode:
+                log.warning("NVENC failed with CPU filters too; retrying with libx264: %s",run.stderr[-1000:])
+                run=subprocess.run([*cpu_cmd,"-c:v","libx264","-preset","ultrafast","-crf","16","-threads","0","-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-movflags","+faststart",video_out],capture_output=True,text=True,encoding="utf-8",errors="replace")
+            if run.returncode: raise RuntimeError("Video assembly failed: "+run.stderr[-2200:])
+        else:
+            # Follow the legacy assembly strategy: encode each scene once, then
+            # concatenate the completed streams without another video encode.
+            encoded_segments=[]
+            segment_durations=[]
+            for idx,(path,dur,source_duration) in enumerate(zip(videos,durations,source_durations)):
+                scene_duration=dur+(gap if idx<len(videos)-1 else 0)+reserved_tail
+                stretch=max(1.0,scene_duration/source_duration)
+                video_filter=(f"setpts=PTS*{stretch:.8f},scale={target_width}:{target_height}:"
+                              f"force_original_aspect_ratio=decrease,pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
+                              f"setsar=1,fps={target_fps},trim=duration={scene_duration:.6f},"
+                              "setpts=PTS-STARTPTS,format=yuv420p")
+                audio_filter=None
+                if video_specs[idx][3]:
+                    tempo=1.0/stretch;tempo_filters=[]
+                    while tempo<0.5:
+                        tempo_filters.append("atempo=0.5");tempo/=0.5
+                    if abs(tempo-1.0)>1e-7: tempo_filters.append(f"atempo={tempo:.8f}")
+                    tempo_chain=(",".join(tempo_filters)+",") if tempo_filters else ""
+                    audio_filter=(f"aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                                  f"{tempo_chain}apad,atrim=duration={scene_duration:.6f},asetpts=PTS-STARTPTS")
+                cmd=[ffmpeg,"-y","-i",path]
+                if not video_specs[idx][3]:
+                    cmd.extend(["-f","lavfi","-t",f"{scene_duration:.6f}","-i","anullsrc=r=48000:cl=stereo"])
+                cmd.extend(["-map","0:v:0","-map","0:a:0" if video_specs[idx][3] else "1:a:0",
+                            "-t",f"{scene_duration:.6f}","-vf",video_filter])
+                if audio_filter: cmd.extend(["-af",audio_filter])
+                # MOV keeps a fine video time base (60,000 ticks/s) so 60 fps
+                # frame timestamps stay distinct when the scenes are stream-copied.
+                segment=os.path.join(work,f"scene-{idx+1:04d}.mov")
+                common_cmd=[*cmd,"-c:a","pcm_s16le","-ar","48000","-ac","2",
+                            "-video_track_timescale",str(target_fps*1000)]
+                run=subprocess.run([*common_cmd,"-c:v","h264_nvenc","-gpu","0","-preset","p1",
+                                    "-rc","vbr","-cq","20","-b:v","0","-bf","0",segment],
+                                   capture_output=True,text=True,encoding="utf-8",errors="replace")
+                if run.returncode:
+                    log.warning("NVENC failed for scene %s; retrying with libx264: %s",idx+1,run.stderr[-1000:])
+                    run=subprocess.run([*common_cmd,"-c:v","libx264","-preset","ultrafast","-bf","0",
+                                        "-crf","16","-threads","0","-pix_fmt","yuv420p",segment],
+                                       capture_output=True,text=True,encoding="utf-8",errors="replace")
+                if run.returncode:
+                    raise HTTPException(500,f"Could not encode scene {idx+1}: {run.stderr[-1800:]}")
+                encoded_segments.append(segment)
+                segment_durations.append(scene_duration)
+                update_music_job(progress=min(90,42+int(48*(idx+1)/len(videos))),
+                                 stage=f"encode scene {idx+1}/{len(videos)}",completed=idx+1,total=len(videos))
+            concat_path=os.path.join(work,"video-scenes.txt")
+            with open(concat_path,"w",encoding="utf-8",newline="\n") as concat_file:
+                for segment,segment_duration in zip(encoded_segments,segment_durations):
+                    concat_file.write("file '"+segment.replace("\\","/").replace("'","'\\''")+"'\n")
+                    concat_file.write(f"duration {segment_duration:.6f}\n")
+            run=subprocess.run([ffmpeg,"-y","-f","concat","-safe","0","-i",concat_path,
+                                "-map","0:v:0","-map","0:a:0","-c:v","copy","-c:a","aac","-b:a","192k",
+                                "-t",f"{video_duration:.6f}","-fps_mode","cfr","-r",str(target_fps),
+                                "-movflags","+faststart",video_out],
+                               capture_output=True,text=True,encoding="utf-8",errors="replace")
+            if run.returncode: raise RuntimeError("Could not concatenate encoded scenes: "+run.stderr[-2200:])
+            for segment in encoded_segments:
+                try: os.remove(segment)
+                except OSError: pass
+            try: os.remove(concat_path)
+            except OSError: pass
+        stage="chuẩn bị tệp kết quả"
+        token=uuid.uuid4().hex
+        with _ASSEMBLY_DOWNLOAD_LOCK:
+            now=time.time()
+            for old_token,(old_work,expires) in list(_MUSIC_ASSEMBLY_OUTPUTS.items()):
+                if expires<=now:
+                    _MUSIC_ASSEMBLY_OUTPUTS.pop(old_token,None)
+                    shutil.rmtree(old_work,ignore_errors=True)
+            _MUSIC_ASSEMBLY_OUTPUTS[token]=(work,now+7200)
+            _write_assembly_state("music_outputs",token,{"path":work,"expires_at":now+7200})
+        update_music_job(status="completed",progress=100,stage="completed",token=token,
+                         audio_url=f"/admin/audio-video-assembly/{token}/audio",
+                         video_url=f"/admin/audio-video-assembly/{token}/video",error="")
+        return {"token":token,
+                "audio_url":f"/admin/audio-video-assembly/{token}/audio",
+                "video_url":f"/admin/audio-video-assembly/{token}/video",
+                "audio_filename":"audio-joined.mp3","video_filename":"video-joined.mp4"}
+    except HTTPException:
+        update_music_job(status="failed", stage=stage, error="Assembly request was rejected.")
+        raise
+    except Exception as exc:
+        update_music_job(status="failed", stage=stage, error=str(exc))
+        log.exception("Audio/video assembly failed during %s",stage)
+        raise HTTPException(500,f"Lỗi trong bước {stage}: {exc}")
+    finally:
+        # Successful output is retained for preview/download; failures are removed.
+        if 'token' not in locals():
+            shutil.rmtree(work,ignore_errors=True)
+
+
+@app.get("/admin/audio-video-assembly/jobs/{job_id}")
+def get_music_assembly_job(job_id: str, _=Depends(auth)):
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}",job_id):
+        raise HTTPException(404,"Kh?ng t?m th?y t?c v?.")
+    job_key="music-"+job_id
+    with _ASSEMBLY_DOWNLOAD_LOCK:
+        state=_ASSEMBLY_JOBS.get(job_key) or _read_assembly_state("jobs",job_key)
+        if state:
+            _ASSEMBLY_JOBS[job_key]=state
+    if not state:
+        return {"status":"not_found"}
+    return {key:state.get(key) for key in ("status","progress","stage","error","token","audio_url","video_url","updated_at")}
+
+
+@app.get("/admin/audio-video-assembly/{token}/{kind}")
+def get_audio_video_assembly_output(token: str, kind: str):
+    # The random 128-bit output token is a short-lived download capability.
+    # Keeping this route token-only lets native audio/video elements stream or
+    # seek large files without buffering the whole response in JavaScript.
+    if not re.fullmatch(r"[a-f0-9]{32}",token) or kind not in {"audio","video"}:
+        raise HTTPException(404,"Không tìm thấy file đầu ra.")
+    with _ASSEMBLY_DOWNLOAD_LOCK:
+        item=_MUSIC_ASSEMBLY_OUTPUTS.get(token)
+        if not item:
+            saved=_read_assembly_state("music_outputs",token)
+            if saved and saved.get("path"):
+                item=(saved["path"],float(saved.get("expires_at") or 0))
+                _MUSIC_ASSEMBLY_OUTPUTS[token]=item
+        if item and item[1]<=time.time():
+            _MUSIC_ASSEMBLY_OUTPUTS.pop(token,None)
+            shutil.rmtree(item[0],ignore_errors=True)
+            item=None
+    if not item:
+        raise HTTPException(404,"File đầu ra đã hết hạn, hãy ghép lại.")
+    path=os.path.join(item[0],"joined-video.mp4" if kind=="video" else "long-audio.mp3")
+    if not os.path.isfile(path):
+        raise HTTPException(404,"Không tìm thấy file đầu ra.")
+    name="video-joined.mp4" if kind=="video" else "audio-joined.mp3"
+    media_type="video/mp4" if kind=="video" else "audio/mpeg"
+    return FileResponse(path,filename=name,media_type=media_type)
 
 
 @app.post("/admin/video-assembly")
@@ -2379,6 +2738,127 @@ def update_concurrency(payload: dict = Body(...), _=Depends(auth)):
 @app.get("/admin/accounts")
 def list_accounts(_=Depends(auth)):
     return {"accounts": store.list_accounts(), "stats": store.stats()}
+
+
+@app.post("/admin/accounts/rule")
+async def load_account_rule(req: AccountRuleRequest, _=Depends(auth)):
+    """Send the supplied rule as a normal Muse chat prompt to each selected account."""
+    rule = req.rule
+    ids = list(dict.fromkeys(req.ids))
+    if not rule:
+        raise HTTPException(400, "Hãy nhập rule cần nạp")
+    if not ids:
+        raise HTTPException(400, "Hãy chọn ít nhất một tài khoản")
+
+    def send_all():
+        results = []
+        with GEN_LOCK:
+            engine.start()
+            try:
+                for aid in ids:
+                    acc = store.get_account(aid)
+                    if not acc:
+                        results.append({"id": aid, "ok": False, "message": "Tài khoản không tồn tại"})
+                        continue
+                    if not acc.get("enabled", True) or not acc.get("cookies"):
+                        results.append({"id": aid, "ok": False, "message": "Tài khoản đang tắt hoặc thiếu cookie"})
+                        continue
+                    try:
+                        engine.ensure_page(acc["cookies"], acc.get("cookies_exp"), account_id=aid)
+                        engine.reset_thread(for_chat=True)
+                        sent = engine._send(rule)
+                        if sent not in ("clicked", "enter-sent"):
+                            raise MuseGenerationError("Không gửi được prompt lên Muse.ai")
+                        _sync_cookies(aid)
+                        results.append({"id": aid, "ok": True, "message": "Đã gửi rule"})
+                    except Exception as exc:  # noqa: BLE001
+                        results.append({"id": aid, "ok": False, "message": str(exc)[:240]})
+                    finally:
+                        engine.close_current_page()
+            finally:
+                engine.close_current_page()
+        return results
+
+    results = await asyncio.to_thread(send_all)
+    return {"results": results, "success_count": sum(x["ok"] for x in results),
+            "failure_count": sum(not x["ok"] for x in results)}
+
+
+@app.post("/admin/accounts/{aid}/chat")
+async def chat_with_account(aid: str, req: AccountChatRequest, _=Depends(auth)):
+    """Chat with exactly one selected Muse account; never rotate to another account."""
+    prompt = build_chat_prompt(req.messages)
+    if not prompt:
+        raise HTTPException(400, "Hãy nhập tin nhắn")
+    acc = store.get_account(aid)
+    if not acc:
+        raise HTTPException(404, "Tài khoản không tồn tại")
+    if not acc.get("enabled", True) or not acc.get("cookies"):
+        raise HTTPException(400, "Tài khoản đang tắt hoặc thiếu cookie")
+    timeout = int(CFG.chat_timeout)
+
+    def event(name: str, **payload):
+        return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def stream_chat():
+        import queue
+        events = queue.Queue(maxsize=32)
+        stop_event = threading.Event()
+
+        def emit(item):
+            while not stop_event.is_set():
+                try:
+                    events.put(item, timeout=0.25)
+                    return
+                except queue.Full:
+                    continue
+
+        def worker():
+            leased = False
+            terminal = ("done", {})
+            try:
+                ACCOUNT_POOL.acquire(account_id=aid, timeout=timeout)
+                leased = True
+                refreshed = _renew_and_persist(aid, wake_vm=True)
+                current = refreshed or store.get_account(aid) or acc
+                with GEN_LOCK:
+                    if stop_event.is_set():
+                        return
+                    engine.start()
+                    engine.reset_thread(for_chat=False)
+                    for chunk in engine.chat_stream(current["cookies"], prompt,
+                                                    current.get("cookies_exp"), timeout,
+                                                    account_id=aid, stop_event=stop_event):
+                        if stop_event.is_set():
+                            return
+                        emit(("delta", {"text": chunk}))
+                store.mark(aid, True, "")
+                _sync_cookies(aid)
+            except Exception as exc:  # noqa: BLE001
+                if isinstance(exc, MuseAuthError):
+                    store.mark(aid, False, str(exc))
+                log.info("Direct Muse chat failed for account %s: %s", aid, exc)
+                terminal = ("error", {"message": str(exc)[:300]})
+            finally:
+                if leased:
+                    ACCOUNT_POOL.release(aid)
+                emit(terminal)
+
+        threading.Thread(target=worker, name=f"muse-chat-{aid[:8]}", daemon=True).start()
+        try:
+            while True:
+                try:
+                    name, payload = events.get(timeout=15)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield event(name, **payload)
+                if name in ("done", "error"):
+                    break
+        finally:
+            stop_event.set()
+
+    return StreamingResponse(stream_chat(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @app.put("/admin/accounts/order")
@@ -2863,6 +3343,8 @@ async def task_session_reopen(task_id: str, _=Depends(auth)):
 
 _COLLECTING_TASKS: set[str] = set()
 _COLLECTING_LOCK = threading.Lock()
+_COLLECT_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_COLLECT_ENGINES: dict[str, MuseEngine] = {}
 
 
 def _collect_accounts(preferred_id: str | None) -> list[dict]:
@@ -2911,13 +3393,26 @@ def _task_video_duration(task: dict) -> int:
 
 def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int = 60,
                           lock_timeout: int = 120, account_wait: int = 60,
-                          expected_duration: int = 10) -> dict:
+                          expected_duration: int = 10, task_id: str | None = None,
+                          cancel_event: threading.Event | None = None) -> dict:
     reserved = None
     worker_engine = None
     worker_profile = None
     try:
-        reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=account_wait,
-                                        record_use=False, allow_overflow=True)
+        account_deadline = time.monotonic() + account_wait
+        while reserved is None:
+            if cancel_event and cancel_event.is_set():
+                raise MuseGenerationError("Video recovery cancelled by user")
+            remaining = account_deadline - time.monotonic()
+            if remaining <= 0:
+                raise MuseGenerationError("Timed out waiting for account to retrieve video")
+            try:
+                reserved = ACCOUNT_POOL.acquire(account_id=account["id"], timeout=min(0.5, remaining),
+                                                record_use=False, allow_overflow=True)
+            except MuseAuthError:
+                raise
+            except MuseGenerationError:
+                continue
         # Each recovery gets its own short-lived Chromium process/profile/CDP port.
         # It can run beside all configured generation workers and is fully closed
         # and removed after this single rendered file has been retrieved.
@@ -2933,16 +3428,34 @@ def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int 
         worker_cfg.ensure_dirs()
         worker_engine = MuseEngine(worker_cfg)
         worker_engine.start()
+        if cancel_event and cancel_event.is_set():
+            raise MuseGenerationError("Video recovery cancelled by user")
+        if task_id:
+            with _COLLECTING_LOCK:
+                _COLLECT_ENGINES[task_id] = worker_engine
+                if cancel_event and cancel_event.is_set():
+                    worker_engine.stop()
+                    raise MuseGenerationError("Video recovery cancelled by user")
         result = worker_engine.collect_rendered(
             reserved["cookies"], muse_url, expect=kind, timeout=timeout,
             expires=reserved.get("cookies_exp"), account_id=reserved["id"],
             expected_duration=expected_duration)
+        if cancel_event and cancel_event.is_set():
+            raise MuseGenerationError("Video recovery cancelled by user")
         os.makedirs(CFG.media_dir, exist_ok=True)
         destination = os.path.join(CFG.media_dir, result["filename"])
         shutil.move(result["path"], destination)
         result["path"] = destination
         return result
+    except Exception as exc:
+        if cancel_event and cancel_event.is_set():
+            raise MuseGenerationError("Video recovery cancelled by user") from exc
+        raise
     finally:
+        if task_id:
+            with _COLLECTING_LOCK:
+                if _COLLECT_ENGINES.get(task_id) is worker_engine:
+                    _COLLECT_ENGINES.pop(task_id, None)
         if worker_engine:
             try:
                 worker_engine.stop()
@@ -2959,7 +3472,8 @@ _HARVEST_NEXT: dict[str, float] = {}
 _HARVEST_MISS: dict[str, int] = {}
 
 
-def _download_rendered(task: dict, muse_url: str, quick: bool = False):
+def _download_rendered(task: dict, muse_url: str, quick: bool = False,
+                       cancel_event: threading.Event | None = None):
     accounts = _collect_accounts(task.get("account"))
     if quick:
         accounts = accounts[:1]
@@ -2975,8 +3489,12 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False):
             return _collect_from_account(
                 account, muse_url, kind, timeout=timeout,
                 lock_timeout=lock_timeout, account_wait=account_wait,
-                expected_duration=_task_video_duration(task)), account
+                expected_duration=_task_video_duration(task),
+                task_id=task.get("id") if not quick else None,
+                cancel_event=cancel_event), account
         except MuseGenerationError as exc:
+            if cancel_event and cancel_event.is_set():
+                raise
             message = str(exc)
             if "đang bận" in message or "忙" in message:
                 raise
@@ -3167,9 +3685,11 @@ async def collect_rendered_task(task_id: str, payload: dict | None = Body(defaul
         if task_id in _COLLECTING_TASKS:
             raise HTTPException(409, "Video này vừa được một lượt khác nhận xử lý. Hãy kiểm tra lại sau.")
         _COLLECTING_TASKS.add(task_id)
+        cancel_event = threading.Event()
+        _COLLECT_CANCEL_EVENTS[task_id] = cancel_event
 
     def collect():
-        return _download_rendered(task, muse_url, quick=False)
+        return _download_rendered(task, muse_url, quick=False, cancel_event=cancel_event)
 
     try:
         result, account = await asyncio.to_thread(collect)
@@ -3183,8 +3703,26 @@ async def collect_rendered_task(task_id: str, payload: dict | None = Body(defaul
     finally:
         with _COLLECTING_LOCK:
             _COLLECTING_TASKS.discard(task_id)
+            _COLLECT_CANCEL_EVENTS.pop(task_id, None)
+            _COLLECT_ENGINES.pop(task_id, None)
     updated = store.get_task(task_id) or {}
     return dict(updated)
+
+
+@app.post("/admin/tasks/{task_id}/collect/cancel")
+def cancel_rendered_task_collection(task_id: str, _=Depends(auth)):
+    with _COLLECTING_LOCK:
+        cancel_event = _COLLECT_CANCEL_EVENTS.get(task_id)
+        worker_engine = _COLLECT_ENGINES.get(task_id)
+        if not cancel_event:
+            raise HTTPException(409, "Không có lượt lấy video nào đang chạy để hủy.")
+        cancel_event.set()
+    if worker_engine:
+        try:
+            worker_engine.stop()
+        except Exception as exc:  # noqa: BLE001
+            log.info("Could not stop video recovery worker for %s: %s", task_id, exc)
+    return {"cancelled": True, "task_id": task_id}
 
 
 async def _session_view_cleanup():

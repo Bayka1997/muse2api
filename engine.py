@@ -1034,20 +1034,22 @@ class MuseEngine:
             has_stop = bool(st.get("stop"))
             choices = st.get("choices") or []
             if cur_cnt > base_agent_cnt and not has_stop and len(choices) >= 2 and any(
-                    re.search(r"re-roll|keep take|skip the scene", str(choice), re.I) for choice in choices):
-                if not reroll_requested and any(re.search(r"^re-roll\b", str(c), re.I) for c in choices):
+                    re.search(r"re-roll|keep take|ship the trimmed|skip (?:the|this) scene", str(choice), re.I)
+                    for choice in choices):
+                if not reroll_requested:
                     clicked = self.page.js("""(function(){
                         var bs=[].slice.call(document.querySelectorAll('div[class*="hatch-chat-groupable-bubble"]'))
                             .filter(function(b){return /hatch-agent-bubble-bg/.test(b.className||'');});
                         var buttons=bs.length ? [].slice.call(bs[bs.length-1].querySelectorAll('button')) : [];
-                        var button=buttons.find(function(b){return /^re-roll\\b/i.test((b.innerText||'').trim()) && !b.disabled && b.getAttribute('aria-disabled')!=='true';});
+                        var option=/^(?:keep take\\b|ship the trimmed\\b|re-roll\\b|skip (?:the|this) scene\\b)/i;
+                        var button=buttons.find(function(b){return option.test((b.innerText||'').trim()) && !b.disabled && b.getAttribute('aria-disabled')!=='true';});
                         if (!button) return false;
                         button.click(); return true;
                     })()""")
                     if clicked is True:
                         reroll_requested = True
                         base_agent_cnt = cur_cnt
-                        log.info("Muse requested a choice; selected Re-roll once in the current conversation")
+                        log.info("Muse requested a choice; selected the first available action once in the current conversation")
                         continue
                 raise MuseGenerationError("MUSE_ACTION_REQUIRED: Muse đang chờ lựa chọn của bạn (" + ", ".join(str(c) for c in choices)[:200] + "). Mở cuộc trò chuyện để xử lý; không tự gửi lại prompt.")
             if cur_cnt > base_agent_cnt and cur_txt and not has_stop and len(atts) <= base_att_cnt:
@@ -1137,7 +1139,7 @@ class MuseEngine:
         "var bs=[].slice.call(scope.querySelectorAll('div[class*=\"hatch-chat-groupable-bubble\"]'))"
         ".filter(function(b){return /hatch-agent-bubble-bg/.test(b.className||'');});"
         "var nonEmpty=bs.filter(function(b){return ((b.innerText||'').trim().length)>0;});"
-        "var txt=nonEmpty.length?(nonEmpty[nonEmpty.length-1].innerText||'').trim():'';"
+        "var txt=nonEmpty.map(function(b){return (b.innerText||'').trim();}).filter(Boolean).join('\\n\\n');"
         "var stop=!!(document.querySelector('[data-testid=\"hatch-composer-stop-button\"]')"
         "||document.querySelector('button[aria-label*=\"Stop\" i]')"
         "||document.querySelector('button[aria-label*=\"停止\"]'));"
@@ -1234,10 +1236,10 @@ class MuseEngine:
             else:
                 stable += 1
                 # Stop 按钮消失说明前端生成彻底结束，连续 3 次（约 0.18s）无新文本即正常退出
-                if not has_stop and stable >= 3:
-                    return
-                # Stop 按钮仍在时绝不过早截断（模型思考、代码块或网络抖动），允许等待至 stable >= 80（约 5s）防卡死
-                if has_stop and stable >= 80:
+                # Muse may pause briefly between sentence-sized bubbles. Only
+                # finish after the stop control is gone and the complete agent
+                # transcript has remained unchanged for about two seconds.
+                if not has_stop and stable >= 34:
                     return
 
         raise MuseGenerationError("等待助手回复超时")
