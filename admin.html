@@ -205,6 +205,11 @@
   .batch-prompt{min-width:250px;max-width:470px;overflow-wrap:anywhere}
   .batch-prompt .prompt-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:550}
   .batch-prompt details{font-size:12px;color:var(--muted);margin-top:5px;white-space:pre-wrap}
+  .batch-prompt .batch-narration{margin:0;color:var(--text);font-size:13px;white-space:normal}
+  .batch-narration summary{cursor:pointer;color:var(--accent)}
+  .batch-narration .narration-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--text);margin-top:4px}
+  .batch-narration[open] .narration-preview{display:none}
+  .batch-narration .narration-full{white-space:pre-wrap;margin-top:6px}
   .batch-prompt textarea{width:100%;min-width:220px;margin-top:0}
   #tab-batch .batch-table{min-width:1720px;table-layout:fixed}
   #tab-batch .batch-table th:nth-child(1),#tab-batch .batch-table td:nth-child(1){width:64px}
@@ -2367,6 +2372,11 @@ function renderBatchDraftList(){
   persistBatchDraft();renderBatchDraftRows();updateBatchStartLabel();
 }
 
+function batchNarrationHtml(text, open=false){
+  if(!text)return '';
+  return `<details class="batch-narration"${open?' open':''}><summary>Xem thuyết minh<span class="narration-preview">${esc(text)}</span></summary><div class="narration-full">${esc(text)}</div></details>`;
+}
+
 function renderBatchDraftRows(){
   const tbody=$('batchResults');
   if(!tbody)return;
@@ -2374,7 +2384,7 @@ function renderBatchDraftRows(){
   const rows=batchDraftJobs.map(job=>`<tr id="batch-draft-${job.index}" data-batch-draft="1">
     <td class="mono">${String(job.promptNumber).padStart(3,'0')}</td>
     <td class="batch-media">${job.imageReferenceKey&&batchUploadPreviews.has(job.imageReferenceKey)?`<img src="${esc(batchUploadPreviews.get(job.imageReferenceKey))}" alt="Ảnh tham chiếu STT ${job.promptNumber}" title="${esc(job.imageReferenceName||'Ảnh upload')}">`:job.imageReferenceName?`<span class="hint">Ảnh upload: ${esc(job.imageReferenceName)}</span>`:'<span class="hint">Chưa chạy</span>'}</td>
-    <td class="batch-prompt">${esc(job.narration||'')}</td>
+    <td class="batch-prompt">${batchNarrationHtml(job.narration)}</td>
     <td class="batch-prompt">${job.editing?`<label>Prompt video</label><textarea id="batch-prompt-edit-${job.index}" rows="3" oninput="rememberBatchPromptDraft(${job.index},this.value)">${esc(job.draft!=null?job.draft:job.prompt)}</textarea>${job.imageFirst&&!job.imageReferenceKey?`<label>Prompt ảnh</label><textarea id="batch-image-prompt-edit-${job.index}" rows="3" oninput="rememberBatchImagePromptDraft(${job.index},this.value)">${esc(job.imageDraft!=null?job.imageDraft:job.imagePrompt)}</textarea>`:''}<div class="acts"><button class="mini" onclick="submitBatchPromptEdit(${job.index})">Lưu sửa</button><button class="ghost mini" onclick="cancelBatchPromptEdit(${job.index})">Hủy</button></div>`:`<div class="prompt-text">${esc(job.prompt)}</div>${job.imageReferenceName?`<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>`:job.imageFirst?`<div class="hint" style="margin-top:6px">Prompt ảnh: ${esc(job.imagePrompt)}</div>`:''}`}</td>
     <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
     <td><span class="badge info">${job.imageFirst?'Image → Video':'Text → Video'}</span></td>
@@ -3501,6 +3511,7 @@ function renderBatchJob(batch, job){
   }
   const box = $('batch-job-' + job.index);
   if (!box) return;
+  const narrationOpen = !!box.querySelector('.batch-narration[open]');
   const cls = job.preparing || job.collecting || job.reconnecting ? 'warn' : job.status === 'completed' ? 'ok' : ['failed','unconfirmed'].includes(job.status) ? 'bad' : 'warn';
   const progress = Number.isFinite(job.progress) ? Math.max(0, Math.min(100, job.progress)) : 0;
   const url = safeBatchMediaUrl(job.url);
@@ -3523,7 +3534,7 @@ function renderBatchJob(batch, job){
       <details><summary>Xem prompt</summary>${esc(job.prompt)}</details>`;
   box.innerHTML = `<td class="mono">${String(batchDisplayNumber(job)).padStart(3,'0')}</td>
     <td class="batch-media">${media}</td>
-    <td class="batch-prompt">${esc(job.narration||'')}</td>
+    <td class="batch-prompt">${batchNarrationHtml(job.narration, narrationOpen)}</td>
     <td class="batch-prompt">${promptBody}
       ${job.imageReferenceName ? `<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>` : job.imageFirst ? `<div class="hint" style="margin-top:6px">Prompt ảnh cho STT ${esc(batchDisplayNumber(job))}: ${esc(job.imagePrompt)}</div>` : ''}
       ${job.savedName ? `<div class="mono" style="color:var(--ok);margin-top:5px">${job.saveState === 'saved' ? 'Đã lưu' : 'Tên file'}: ${esc(job.savedName)}</div>` : ''}
