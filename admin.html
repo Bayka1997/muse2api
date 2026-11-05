@@ -383,6 +383,7 @@
       <div class="batch-toolbar">
         <div class="batch-filters">
           <button class="ghost mini active" id="batchFilterAll" onclick="setBatchFilter('all')">Tất cả (0)</button>
+          <button class="ghost mini" id="batchFilterUnreviewed" onclick="setBatchFilter('unreviewed')">Chưa duyệt (0)</button>
           <button class="ghost mini" id="batchFilterSending" onclick="setBatchFilter('sending')">Đang gửi (0)</button>
           <button class="ghost mini" id="batchFilterWaiting" onclick="setBatchFilter('waiting')">Đang chờ lượt (0)</button>
           <button class="ghost mini" id="batchFilterCompleted" onclick="setBatchFilter('completed')">Hoàn thành (0)</button>
@@ -2370,7 +2371,7 @@ function restoreBatchDraft(){
 
 function renderBatchDraftList(){
   batchDraftJobs.forEach((job,index)=>{job.index=batchNextNumber-1+index;});
-  persistBatchDraft();renderBatchDraftRows();updateBatchStartLabel();
+  persistBatchDraft();renderBatchDraftRows();updateBatchStartLabel();applyBatchFilter();
 }
 
 function batchNarrationHtml(text, open=false){
@@ -3486,13 +3487,15 @@ async function loadLocalBatchPreview(batch, job, directory){
 }
 
 function batchPreviewHtml(batch, job){
+  const pending=job.preparing||job.collecting||job.reconnecting||job.recoveryQueued||job.sendQueued||['waiting','submitting','queued','processing','running'].includes(job.status);
+  const loading=pending?`<div class="hint" role="status" style="margin-top:8px"><span class="spin" aria-hidden="true"></span>${job.collecting||job.reconnecting||job.recoveryQueued?'Đang lấy video…':job.status==='submitting'?'Đang gửi prompt…':job.status==='waiting'?'Đang chờ lượt…':batch.kind==='video'?'Đang tạo video…':'Đang tạo ảnh…'}</div>`:'';
   if(batch.kind==='video'&&job.imageReferenceKey&&job.status!=='completed'){
     hydrateBatchUploadPreview(job.imageReferenceKey);
     const preview=batchUploadPreviews.get(job.imageReferenceKey);
-    return preview?`<img src="${esc(preview)}" alt="Ảnh tham chiếu STT ${batchDisplayNumber(job)}" title="${esc(job.imageReferenceName||'Ảnh upload')}">`:`<span class="hint">Ảnh upload: ${esc(job.imageReferenceName||'ảnh tham chiếu')}</span>`;
+    return (preview?`<img src="${esc(preview)}" alt="Ảnh tham chiếu STT ${batchDisplayNumber(job)}" title="${esc(job.imageReferenceName||'Ảnh upload')}">`:`<span class="hint">Ảnh upload: ${esc(job.imageReferenceName||'ảnh tham chiếu')}</span>`)+loading;
   }
   if (batch.kind === 'video' && job.imageFirst && job.imageUrl && job.status !== 'completed')
-    return `<img src="${esc(safeBatchMediaUrl(job.imageUrl))}" alt="Ảnh tham chiếu đã tạo" title="Ảnh tham chiếu đã tạo">`;
+    return `<img src="${esc(safeBatchMediaUrl(job.imageUrl))}" alt="Ảnh tham chiếu đã tạo" title="Ảnh tham chiếu đã tạo">${loading}`;
   const preview = cachedLocalPreview(batch, job);
   if (preview) {
     if (batch.kind === 'video')
@@ -3512,7 +3515,7 @@ function batchPreviewHtml(batch, job){
   if (job.saveState === 'saved' && job.savedName && batchDirectoryRestore)
     return `<span class="hint">Đã nhớ thư mục: ${esc(batchDirectoryRestore.name)}</span><button class="ghost mini" onclick="chooseBatchFolder()">Cho phép mở video đã lưu</button>`;
   if (job.saveState === 'saved' && job.savedName) return '<span class="hint">Chọn lại thư mục để xem</span>';
-  if (job.preparing || job.collecting || job.reconnecting || ['waiting','submitting','queued','processing'].includes(job.status)) return '<span class="spin"></span>';
+  if (loading) return loading;
   return '—';
 }
 
@@ -3647,6 +3650,7 @@ function markBatchVideoCompleted(index){
   persistBatchHistory(); renderBatchJob(batch, job);
 }
 function matchesBatchFilter(job, filter){
+  if(filter==='unreviewed')return job.needsPromptReview!==false;
   if(job.status==='image_ready')return filter==='all'||filter==='waiting';
   // Recovery temporarily moves failed rows into the active sending view.
   if (job.collecting) return filter === 'all' || filter === 'sending';
@@ -3676,9 +3680,13 @@ function applyBatchFilter(){
     const visible = matchesBatchFilter(job,batchFilter) && (!query || `${batchDisplayNumber(job)} ${job.prompt}`.toLowerCase().includes(query));
     if (row) row.hidden = !visible;
   }
-  for(const job of batchDraftJobs){const row=$('batch-draft-'+job.index);if(row)row.hidden=!['all','waiting'].includes(batchFilter);}
-  for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['sending','batchFilterSending','Đang gửi'],['waiting','batchFilterWaiting','Đang chờ lượt'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi'],['recovery','batchFilterRecovery','Chờ lấy lại']]) {
-    $(id).textContent = `${label} (${entries.filter(({job})=>matchesBatchFilter(job,filter)).length + (filter==='all'||filter==='waiting'?batchDraftJobs.length:0)})`;
+  for(const job of batchDraftJobs){
+    const row=$('batch-draft-'+job.index);
+    const visible=(['all','waiting'].includes(batchFilter)||(batchFilter==='unreviewed'&&job.needsPromptReview!==false))&&(!query||`${job.promptNumber} ${job.prompt}`.toLowerCase().includes(query));
+    if(row)row.hidden=!visible;
+  }
+  for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['unreviewed','batchFilterUnreviewed','Chưa duyệt'],['sending','batchFilterSending','Đang gửi'],['waiting','batchFilterWaiting','Đang chờ lượt'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi'],['recovery','batchFilterRecovery','Chờ lấy lại']]) {
+    $(id).textContent = `${label} (${entries.filter(({job})=>matchesBatchFilter(job,filter)).length + (filter==='all'||filter==='waiting'?batchDraftJobs.length:filter==='unreviewed'?batchDraftJobs.filter(job=>job.needsPromptReview!==false).length:0)})`;
     $(id).classList.toggle('active',batchFilter === filter);
   }
   if (!entries.length&&!batchDraftJobs.length) $('batchResults').innerHTML = '<tr><td colspan="7" class="empty">Chưa có prompt. Thêm prompt ở phía trên.</td></tr>';
@@ -4194,6 +4202,22 @@ async function resumeBatch(){
   await executeBatchEntries(entries);
 }
 
+async function retryFailedBatchJob(batch, job, runner){
+  if(!runner || runner.stop || runner.abandoned || job.deleted || job.status!=='failed' || !$('batchAutoRetry').checked)return false;
+  const retried=runner.retried||(runner.retried=new Set());
+  if(retried.has(job))return false;
+  // Reserve this retry before awaiting anything so concurrent workers cannot resend it.
+  retried.add(job);
+  resetBatchJobForResume(job,runner.token);
+  job.needsPromptReview=true;
+  job.status='submitting';
+  job.reconnectNote='Đang gửi lại sau lỗi · thử lại một lần.';
+  renderBatchJob(batch,job);
+  persistBatchHistory();
+  await processBatchJob(batch,job,runner);
+  return true;
+}
+
 async function processBatchJob(batch, job, runner, accountId){
   delete job.sendQueued;
   const stage = job.imageFirst && job.phase !== 'video' ? 'image' : 'video';
@@ -4215,7 +4239,6 @@ async function processBatchJob(batch, job, runner, accountId){
   } catch(error) {
     job.status='failed';job.error='MUSE_ACTION_REQUIRED: '+error.message;
     renderBatchJob(batch,job);
-    await rerunBatchJobs('one', job.index, {force:true});
     return;
   }
   if (runner.stop || !alive()) return;
@@ -4304,7 +4327,6 @@ async function processBatchJob(batch, job, runner, accountId){
         stopBatch(runner);
       }
       renderBatchJob(batch, job);
-      if (job.status === 'failed') await rerunBatchJobs('one', job.index, {force:true});
       return;
     }
   }
@@ -4337,7 +4359,6 @@ async function processBatchJob(batch, job, runner, accountId){
       if (job.status === 'failed') {
         job.error = 'Tác vụ hoàn tất nhưng không có liên kết kết quả hợp lệ.';
         renderBatchJob(batch, job);
-        await rerunBatchJobs('one', job.index, {force:true});
         return;
       }
       renderBatchJob(batch, job);
@@ -4348,10 +4369,7 @@ async function processBatchJob(batch, job, runner, accountId){
     if (job.status === 'failed' || job.status === 'cancelled') {
       job.status = 'failed'; job.error = result.error || 'Tạo nội dung thất bại';
       renderBatchJob(batch, job);
-      if (!alive()) return;
-      job.reconnectNote = 'Tác vụ lỗi; đang gửi lại prompt tự động.';
-      renderBatchJob(batch, job);
-      await rerunBatchJobs('one', job.index, {force:true});
+      if(result.status==='failed')await retryFailedBatchJob(batch,job,runner);
       return;
     }
     if (!job.id) {
@@ -4373,10 +4391,8 @@ async function processBatchJob(batch, job, runner, accountId){
           if (!alive()) return;
           if (cancelled.cancelled) {
             job.status = 'failed';
-            job.error = 'Video đã chờ đủ 600 giây; đã đóng luồng cũ và đang tạo lại.';
-            job.reconnectNote = 'Tự tạo lại sau khi hết thời gian chờ.';
+            job.error = 'Video đã chờ đủ 600 giây; đã đóng luồng cũ. Bấm Tạo lại để thử lại.';
             renderBatchJob(batch, job);
-            await rerunBatchJobs('one', job.index, {force:true});
             return;
           }
           const afterCancel = await api(endpoint + '/' + encodeURIComponent(job.id));
@@ -4724,7 +4740,7 @@ async function rerunBatchJobs(mode, index, options){
     }
     if (currentRunner.setConcurrency) currentRunner.setConcurrency(currentRunner.concurrency);
     updateBatchListControls();
-    toast(`\u0110? ??a ${entries.length} prompt v?o h?ng ch?; gi\u1edbi h?n lu?ng ?ang ch?y v\u1eabn ???c ?p d?ng.`);
+    toast(`Đã đưa ${entries.length} prompt vào hàng chờ; giới hạn luồng đang chạy vẫn được áp dụng.`);
     return;
   }
   if (!abandon && (batchSending() || batchRestarting) && !batchRecoveringVideos) {
@@ -4944,7 +4960,7 @@ async function executeBatchEntries(entries){
   const concurrency = batchParallelLimit();
   runner.concurrency=concurrency;
   const autoRetry = $('batchAutoRetry').checked && entries.some(({batch})=>batch.kind === 'video');
-  const retried = new Set();
+  const retried = runner.retried = new Set();
   const lanes = batchAccountLanes(10, 10);
   const workerPromises=[];
   const activeLanes=new Set();

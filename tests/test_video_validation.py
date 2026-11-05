@@ -13,10 +13,10 @@ from engine import MuseEngine, MuseGenerationError
 
 
 class VideoValidationTests(unittest.TestCase):
-    def test_both_download_paths_require_ten_seconds(self):
+    def test_both_download_paths_preserve_original_duration(self):
         with tempfile.TemporaryDirectory() as folder:
             engine = MuseEngine(SimpleNamespace(profile_dir=folder, media_dir=folder))
-            for seconds in (10, 5, 9, 11):
+            for seconds in (6, 10, 5, 9, 11):
                 source = Path(folder) / 'source.mp4'
                 subprocess.run([
                     imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-y',
@@ -30,13 +30,12 @@ class VideoValidationTests(unittest.TestCase):
                         engine.extract_bytes = lambda *a, **kw: (
                             data if via == 'blob' else None, 'video/mp4', 'clip.mp4')
                         engine._download_fallback = lambda *a: str(source)
-                        if seconds == 10:
-                            result = engine._deliver_attachment({'vSrc': 'clip.mp4'}, 'video')
-                            self.assertEqual(result['via'], via)
-                            os.remove(result['path'])
-                        else:
-                            with self.assertRaisesRegex(MuseGenerationError, 'yêu cầu 10s'):
-                                engine._deliver_attachment({'vSrc': 'clip.mp4'}, 'video')
+                        result = engine._deliver_attachment(
+                            {'vSrc': 'clip.mp4'}, 'video', expected_duration=6)
+                        self.assertEqual(result['via'], via)
+                        self.assertEqual(Path(result['path']).read_bytes(), data)
+                        self.assertEqual(result['size'], len(data))
+                        os.remove(result['path'])
                         self.assertEqual(list(Path(folder).glob('*.mp4')),
                                          [source] if via == 'blob' else [])
 

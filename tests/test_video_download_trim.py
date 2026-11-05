@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import imageio_ffmpeg
 import app
+from engine import validate_video_file
 
 
 class VideoDownloadTests(unittest.TestCase):
@@ -21,6 +22,10 @@ class VideoDownloadTests(unittest.TestCase):
                 '-t', '10', '-c:v', 'libx264', '-c:a', 'aac', source,
             ], check=True, capture_output=True)
             original = Path(source).read_bytes()
+            # Recovering a manually regenerated 10s result must retain its bytes,
+            # even if the original task requested a 6s clip.
+            validate_video_file(source, expected_duration=None)
+            self.assertEqual(Path(source).read_bytes(), original)
             with patch.object(app, 'CFG', SimpleNamespace(media_dir=folder)):
                 self.assertEqual(app.get_media('sample.mp4').path, source)
                 response = app.get_media('sample.mp4', download=True)

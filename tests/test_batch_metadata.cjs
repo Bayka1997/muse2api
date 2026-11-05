@@ -54,3 +54,16 @@ const restoredJob = JSON.parse(JSON.stringify(pendingJob));
 context.resetBatchJobForResume(restoredJob, 'resume');
 assert.equal(restoredJob.needsPromptReview, false);
 console.log('Unreviewed prompts default to pending; explicit approval survives persistence and resume.');
+{
+  const start = script.indexOf('function matchesBatchFilter(');
+  const rest = script.slice(start);
+  vm.runInContext(rest.slice(0, rest.search(/\n(?:async )?function /)), context);
+  for (const status of ['waiting','running','completed','failed','stopped']) {
+    assert.equal(context.matchesBatchFilter({status}, 'unreviewed'), true);
+    assert.equal(context.matchesBatchFilter({status,needsPromptReview:true}, 'unreviewed'), true);
+    assert.equal(context.matchesBatchFilter({status,needsPromptReview:false}, 'unreviewed'), false);
+  }
+  assert.equal(context.matchesBatchFilter({recoveryQueued:true}, 'unreviewed'), true);
+  assert.equal(context.matchesBatchFilter({collecting:true,needsPromptReview:false}, 'unreviewed'), false);
+  console.log('Unreviewed filter includes pending reviews independently of generation status.');
+}

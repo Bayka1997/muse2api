@@ -49,7 +49,7 @@ def engine_for(tmp):
 def main():
     # Selection fixtures contain placeholder bytes; file validation has real-media tests.
     original_validate = engine_module.validate_video_file
-    engine_module.validate_video_file = lambda _path: None
+    engine_module.validate_video_file = lambda _path, **kwargs: None
     original_sleep = engine_module.time.sleep
     engine_module.time.sleep = lambda _seconds: None
     try:
@@ -190,6 +190,33 @@ def main():
             }]
             picked = engine._rendered_media("video")
             assert picked["vSrc"] == "blob:https://muse.ai/scene"
+
+            # Start at the bottom even when navigation restores an old position.
+            order = []
+            old = {"tid":"thread-video", "src":"old-6s.mp4", "vSrc":"old-6s.mp4"}
+            latest = {"tid":"thread-video", "src":"latest-10s.mp4", "vSrc":"latest-10s.mp4"}
+            engine._scroll_bottom = lambda: order.append("bottom")
+            engine.attachments = lambda: [old, latest] if order else [old]
+            assert engine._scan_rendered_media("video")["src"] == "latest-10s.mp4"
+            assert order[0] == "bottom"
+            # Cached resources must never substitute for a thread attachment.
+            engine.attachments = lambda: []
+            engine._resource_videos = lambda: [old]
+            assert engine._rendered_media("video") is None
+            # A failed latest download must not silently select a previous result.
+            engine._scan_rendered_media = lambda *args: latest
+            attempted = []
+            def fail_latest(att, expect, expected_duration=None):
+                attempted.append((att["src"], expected_duration))
+                raise MuseGenerationError("latest download failed")
+            engine._deliver_attachment = fail_latest
+            try:
+                engine.collect_rendered({}, "https://muse.ai/thread/abc")
+            except MuseGenerationError as exc:
+                assert "latest download failed" in str(exc)
+            else:
+                raise AssertionError("latest failure was hidden")
+            assert attempted == [("latest-10s.mp4", None)]
 
             try:
                 engine.collect_rendered({"hatch_sess": "secret"}, "https://evil.test/thread/abc")

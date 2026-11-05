@@ -37,44 +37,11 @@ PAGE_CLIP_BYTES = 357801
 PAGE_CLIP_SHA256 = "ace1b168a5cb90ac8f8c6316961aef6d8ccfdb3c3a8754057d995199365f6b2f"
 
 
-def _trim_video_file(path: str, expected_duration: int) -> None:
-    """Accurately re-encode an overlong download to the requested duration.
+def validate_video_file(path: str, expected_duration: int | None = 10) -> None:
+    """Check media validity without altering the original video or its duration.
 
-    Stream-copy trimming can retain the original stream duration (or cut only
-    at a keyframe), so it is not suitable for validating the delivered clip.
+    expected_duration remains accepted for compatibility; it never triggers trimming.
     """
-    import imageio_ffmpeg
-
-    temp_path = f"{path}.trim{os.path.splitext(path)[1]}"
-    ext = os.path.splitext(path)[1].lower()
-    video_codec = "libvpx-vp9" if ext == ".webm" else "libx264"
-    audio_codec = "libopus" if ext == ".webm" else "aac"
-    command = [
-        imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-y", "-i", path,
-        "-t", f"{float(expected_duration):.3f}", "-map", "0:v:0", "-map", "0:a?",
-        "-c:v", video_codec,
-    ]
-    if video_codec == "libx264":
-        command.extend(["-preset", "veryfast", "-crf", "18"])
-    else:
-        command.extend(["-deadline", "good", "-cpu-used", "4", "-crf", "32"])
-    command.extend(["-c:a", audio_codec])
-    if ext in (".mp4", ".mov"):
-        command.extend(["-movflags", "+faststart"])
-    command.append(temp_path)
-    try:
-        subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=90, check=True)
-        os.replace(temp_path, path)
-    finally:
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except OSError:
-            pass
-
-
-def validate_video_file(path: str, expected_duration: int = 10) -> None:
-    """Reject wrong clips before delivery, allowing only timestamp rounding."""
     try:
         import imageio_ffmpeg
 
@@ -87,19 +54,8 @@ def validate_video_file(path: str, expected_duration: int = 10) -> None:
             raise ValueError("Không đọc được thời lượng video")
         hours, minutes, seconds = map(float, duration_match.groups())
         duration = hours * 3600 + minutes * 60 + seconds
-        if duration > float(expected_duration) + 0.05:
-            _trim_video_file(path, expected_duration)
-            probe = subprocess.run(
-                [imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-i", path],
-                capture_output=True, text=True, errors="replace", timeout=20)
-            duration_match = re.search(
-                r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe.stderr)
-            if not duration_match:
-                raise ValueError("Could not read duration after trimming")
-            hours, minutes, seconds = map(float, duration_match.groups())
-            duration = hours * 3600 + minutes * 60 + seconds
-        if not math.isfinite(duration) or abs(duration - float(expected_duration)) > 0.05:
-            raise ValueError(f"Video dài {duration:.2f}s; yêu cầu {expected_duration}s")
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("Thời lượng video không hợp lệ")
         if file_is_page_clip(path):
             raise ValueError("Đây là video icon của Muse AI")
     except Exception as exc:
@@ -782,6 +738,7 @@ class MuseEngine:
         "  if(src && !seen.has(src)){"
         "    seen.add(src);"
         "    list.push({"
+        "      _node: el,"
         "      tid: tid || el.getAttribute('data-testid') || (isVid ? 'video' : 'image'),"
         "      hasVideo: !!v,"
         "      hasImg: !!img,"
@@ -805,12 +762,14 @@ class MuseEngine:
         "  var thread=a.closest('[data-testid^=\"hatch-chat-attachment-presentation-\"], div[class*=\"hatch-agent-bubble-bg\"], div[class*=\"hatch-chat-groupable-bubble\"]');"
         "  if(!thread || thread.closest('form, [class*=chat-user-bubble], [class*=\"group/msg\"]')) return;"
         "  seen.add(h);"
-        "  list.push({tid: thread.getAttribute('data-testid') || 'thread-video', hasVideo:true, hasImg:false, src:h, vSrc:h, iSrc:'', w:0, h:0});"
+        "  list.push({_node:a,tid: thread.getAttribute('data-testid') || 'thread-video', hasVideo:true, hasImg:false, src:h, vSrc:h, iSrc:'', w:0, h:0});"
         "});"
         "document.querySelectorAll('div[class*=\"hatch-agent-bubble-bg\"] img, div[class*=\"hatch-agent-bubble-bg\"] video, div[class*=\"hatch-chat-groupable-bubble\"] img, div[class*=\"hatch-chat-groupable-bubble\"] video').forEach(function(m){"
         "  var s = m.currentSrc || m.src || '';"
         "  if(s && !s.includes('avatar') && !s.includes('emoji')) addEl(m.parentElement || m, 'agent-media');"
         "});"
+        "list.sort(function(a,b){var p=a._node.compareDocumentPosition(b._node);return p&4?-1:p&2?1:0;});"
+        "list.forEach(function(a){delete a._node;});"
         "return JSON.stringify(list);"
         "})()"
     )
@@ -1463,7 +1422,7 @@ class MuseEngine:
     def generate(self, cookies: dict, prompt: str, expect: str = "image",
                  timeout: int = 240, expires: dict | None = None, account_id: str | None = None,
                  on_progress=None, reference_image: str | None = None,
-                 stop_event=None, expected_duration: int = 10) -> dict:
+                 stop_event=None, expected_duration: int | None = 10) -> dict:
         if stop_event is not None and stop_event.is_set():
             raise MuseGenerationError("Generation cancelled by user")
         self._local.generation_submitted = False
@@ -1564,14 +1523,16 @@ class MuseEngine:
             "var el=pickChatScroller(); if(el) el.scrollTop=y; return 1;})(%d)" % int(offset))
 
     def _scan_rendered_media(self, expect: str, skipped: set | None = None) -> dict | None:
-        """Wait at the current scroll position first. Muse assigns the blob src a few
-        seconds after the attachment shell appears; scrolling immediately unmounts it."""
+        """Start at the newest turn and allow its media source time to mount."""
+        # Navigation may restore an old scroll position. Start at the newest turn.
+        self._scroll_bottom()
+        time.sleep(0.8)
         for _ in range(14):
             found = self._rendered_media(expect, skipped)
             if found:
                 return found
             time.sleep(0.6)
-        for offset in self._chat_scroll_offsets()[:8]:
+        for offset in list(reversed(self._chat_scroll_offsets()))[:8]:
             try:
                 self._scroll_chat_to(offset)
             except Exception:  # noqa: BLE001
@@ -1632,15 +1593,13 @@ class MuseEngine:
                        if self._media_candidate(att, expect, skipped)]
         if attachments:
             return attachments[-1]
-        if expect != "video":
-            return None
-        resources = [att for att in self._resource_videos()
-                     if self._media_candidate(att, expect, skipped)]
-        return resources[-1] if resources else None
+        # Performance entries are ordered by fetch time, not conversation order.
+        # An old clip fetched again can appear last; require a thread attachment.
+        return None
 
     def collect_rendered(self, cookies: dict, url: str, expect: str = "video",
                          expires: dict | None = None, account_id: str | None = None,
-                         timeout: int = 60, expected_duration: int = 10) -> dict:
+                         timeout: int = 60, expected_duration: int | None = None) -> dict:
         """Download a file Muse already rendered. Never sends the prompt again."""
         parsed = urlsplit(url or "")
         if not (parsed.scheme == "https" and parsed.hostname in ("muse.ai", "www.muse.ai")
@@ -1660,12 +1619,8 @@ class MuseEngine:
                 time.sleep(0.8)
                 continue
             selected = (att.get("vSrc") if expect == "video" else None) or att.get("src") or ""
-            try:
-                result = self._deliver_attachment(att, expect, expected_duration=expected_duration)
-            except MuseGenerationError:
-                if selected:
-                    skipped.add(selected)
-                continue
+            # Never replace a failed latest download with an older successful clip.
+            result = self._deliver_attachment(att, expect, expected_duration=expected_duration)
             if expect == "video" and file_is_page_clip(result.get("path") or ""):
                 try:
                     os.remove(result["path"])
@@ -1679,7 +1634,7 @@ class MuseEngine:
         label = "video" if expect == "video" else "ảnh"
         raise MuseGenerationError(f"Cuộc trò chuyện chưa có {label} đã render để lấy về.")
 
-    def _deliver_attachment(self, att: dict, expect: str, expected_duration: int = 10) -> dict:
+    def _deliver_attachment(self, att: dict, expect: str, expected_duration: int | None = 10) -> dict:
         os.makedirs(self.cfg.media_dir, exist_ok=True)
         log.info("Media download starting: kind=%s", expect)
         download_started = time.monotonic()

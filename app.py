@@ -895,7 +895,7 @@ def build_video_prompt(r: VideoRequest) -> str:
     user_prompt = r.prompt.strip()
     ar = (r.aspect_ratio or "").strip().lower()
     sz = (r.size or "").strip().lower()
-    dur = r.duration or 6
+    duration_instruction = f"Duration: exactly {r.duration} seconds. " if r.duration is not None else ""
     has_ref = bool(r.reference_image or r.reference_images or r.image or r.image_url)
 
     is_vertical = any(k in ar or k in sz for k in ("9:16", "9/16", "portrait", "竖屏", "720x1280", "1080x1920"))
@@ -903,19 +903,19 @@ def build_video_prompt(r: VideoRequest) -> str:
     parts = []
     if is_vertical:
         if has_ref:
-            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate a strictly 9:16 vertical portrait image-to-video animation, 720x1280, full-screen phone framing with height greater than width. Start from the attached reference image and continue its action. Do not generate landscape framing or black borders. Duration: exactly {dur} seconds. Description: {user_prompt}")
+            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate a strictly 9:16 vertical portrait image-to-video animation, 720x1280, full-screen phone framing with height greater than width. Start from the attached reference image and continue its action. Do not generate landscape framing or black borders. {duration_instruction}Description: {user_prompt}")
         else:
-            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a strictly 9:16 vertical portrait video, 720x1280, full-screen phone framing with height greater than width. Keep the composition vertical; do not generate landscape framing or black borders. Duration: exactly {dur} seconds. Description: {user_prompt}")
+            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a strictly 9:16 vertical portrait video, 720x1280, full-screen phone framing with height greater than width. Keep the composition vertical; do not generate landscape framing or black borders. {duration_instruction}Description: {user_prompt}")
     elif any(k in ar or k in sz for k in ("16:9", "16/9", "landscape", "横屏", "1280x720", "1920x1080")):
         if has_ref:
-            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate a 16:9 widescreen landscape image-to-video animation. Start from the attached reference image and continue its action. Duration: exactly {dur} seconds. Description: {user_prompt}")
+            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate a 16:9 widescreen landscape image-to-video animation. Start from the attached reference image and continue its action. {duration_instruction}Description: {user_prompt}")
         else:
-            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a 16:9 widescreen landscape video. Duration: exactly {dur} seconds. Description: {user_prompt}")
+            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a 16:9 widescreen landscape video. {duration_instruction}Description: {user_prompt}")
     else:
         if has_ref:
-            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate an image-to-video animation. Start from the attached reference image and continue its action. Duration: exactly {dur} seconds. Description: {user_prompt}")
+            parts.append(f"Use only the reference image uploaded with this request as the first frame. Do not use historical images or any other image. Generate an image-to-video animation. Start from the attached reference image and continue its action. {duration_instruction}Description: {user_prompt}")
         else:
-            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a video. Duration: exactly {dur} seconds. Description: {user_prompt}")
+            parts.append(f"Create a new video from text only. Do not reference any historical images or previous context. Generate a video. {duration_instruction}Description: {user_prompt}")
 
     if r.resolution:
         parts.append(f"Resolution/quality: {r.resolution}.")
@@ -1028,7 +1028,7 @@ def _run_generation(prompt: str, kind: str, timeout: int,
                     reference_image: str | None = None,
                     on_acquired=None, on_context=None, task_id=None,
                     cancel_event: threading.Event | None = None,
-                    expected_duration: int = 10) -> tuple[dict, str | None]:
+                    expected_duration: int | None = 10) -> tuple[dict, str | None]:
     # Browser ownership covers account selection, retry and cleanup, not just generate().
     # The generation clock starts after an account is free. Queue time must not consume it.
     lock_deadline = time.monotonic() + max(1, timeout)
@@ -1068,7 +1068,7 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
                     reference_image: str | None = None, deadline=None, on_context=None,
                     task_id=None, cancel_event: threading.Event | None = None,
-                    expected_duration: int = 10) -> tuple[dict, str | None]:
+                    expected_duration: int | None = 10) -> tuple[dict, str | None]:
     # Several batch rows can wait behind the few signed-in accounts. Give them
     # time for a few finished videos before failing, then give the winner a full generation budget.
     account_wait = max(1, timeout) * 4 if deadline is None else max(1, int(deadline - time.monotonic()))
@@ -1463,7 +1463,7 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
         task = store.create_task("video", req.prompt)
         tid = task["id"]
         cancel_event = _register_task_cancel(tid)
-        store.update_task(tid, api_prompt=prompt, duration=req.duration or 6,
+        store.update_task(tid, api_prompt=prompt, duration=req.duration,
                           timeout=timeout, requested_account_id=req.account_id or None)
         store.update_task(tid, progress=10)
         store.set_task_input(tid, reference_image=ref_img)
@@ -1484,7 +1484,7 @@ async def create_video(req: VideoRequest, _=Depends(auth)):
                                           reference_image=lambda: store.get_task_input(tid).get("reference_image"), on_acquired=_on_acquired,
                                           on_context=lambda context: store.update_task(tid, **context), task_id=tid,
                                           cancel_event=cancel_event,
-                                          expected_duration=task_data.get("duration") or 6)
+                                          expected_duration=task_data.get("duration"))
             if cancel_event.is_set():
                 store.update_task(tid, status="cancelled", error="Cancelled by user")
                 return
@@ -3393,7 +3393,7 @@ def _task_video_duration(task: dict) -> int:
 
 def _collect_from_account(account: dict, muse_url: str, kind: str, timeout: int = 60,
                           lock_timeout: int = 120, account_wait: int = 60,
-                          expected_duration: int = 10, task_id: str | None = None,
+                          expected_duration: int | None = 10, task_id: str | None = None,
                           cancel_event: threading.Event | None = None) -> dict:
     reserved = None
     worker_engine = None
@@ -3489,7 +3489,9 @@ def _download_rendered(task: dict, muse_url: str, quick: bool = False,
             return _collect_from_account(
                 account, muse_url, kind, timeout=timeout,
                 lock_timeout=lock_timeout, account_wait=account_wait,
-                expected_duration=_task_video_duration(task),
+                # Recovery retrieves the actual latest render, which may have been
+                # regenerated manually with a different duration in Muse.
+                expected_duration=None,
                 task_id=task.get("id") if not quick else None,
                 cancel_event=cancel_event), account
         except MuseGenerationError as exc:
