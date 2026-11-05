@@ -323,8 +323,6 @@
       <div class="hint">Nhập prompt, bấm thêm vào danh sách để kiểm tra STT và chế độ chạy. Chỉ bấm Start sau khi đã chuẩn bị xong; mỗi dòng trống được bỏ qua.</div>
       <div class="row">
         <div><label>Loại nội dung</label><select id="batchKind" onchange="updateBatchOptions(); saveBatchSettings()"><option value="image">Ảnh</option><option value="video">Video</option></select></div>
-        <div><label>Tỷ lệ</label><select id="batchSize"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></div>
-        <div id="batchDurationField" style="display:none"><label>Thời lượng video (giây)</label><select id="batchDuration"><option>5</option><option>6</option><option>8</option><option value="10" selected>10</option></select></div>
         <div><label>Số tác vụ đồng thời</label><select id="batchConcurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
       </div>
       <label style="margin-top:14px">Prompt video (mỗi dòng theo STT)</label>
@@ -423,7 +421,6 @@
       </div>
       <div class="acts" style="margin-top:8px"><button type="button" class="ghost" id="ivLoadVideoPrompts" onclick="loadImageVideoPrompts()">Nạp prompt video</button><button type="button" class="ghost" id="ivUpdatePrompts" onclick="updateImageVideoPromptList()">Cập nhật danh sách theo prompt</button><span class="hint">Nạp prompt video sẽ cập nhật theo thứ tự; dòng thiếu prompt sẽ để trống.</span></div>
       <div class="row" style="align-items:end;margin-top:10px">
-        <div><label for="ivSize">Tỷ lệ</label><select id="ivSize" onchange="persistImageVideoFlow()"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></div>
         <div><label for="ivWorkers">Số worker đồng thời</label><select id="ivWorkers" onchange="imageVideoWorkersChanged()"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
         <button type="button" class="primary" id="ivCreateImages" onclick="startImageVideoImages()">Tạo ảnh</button>
         <button type="button" class="primary" id="ivCreateVideos" onclick="startImageVideoVideos()" disabled>Tạo video</button>
@@ -777,8 +774,6 @@
       <div class="row">
         <div style="flex:3"><label>Mô tả yêu cầu</label>
           <input type="text" id="imgPrompt" value="Một chú chó Shiba đội mũ phi hành gia, phong cách cyberpunk, nền đèn neon"></div>
-        <div style="max-width:140px"><label>Tỷ lệ</label>
-          <select id="imgSize"><option>1:1</option><option>16:9</option><option>9:16</option><option>4:3</option><option>3:4</option></select></div>
       </div>
       <div style="margin-top:12px"><button class="primary-lg" id="imgBtn" onclick="runImage()">Bắt đầu tạo ảnh</button></div>
       <div class="result" id="imgRes"></div>
@@ -790,10 +785,6 @@
       <div class="row">
         <div style="flex:3"><label>Mô tả yêu cầu</label>
           <input type="text" id="vidPrompt" value="Một chú mèo con màu cam đi chậm trên bãi cỏ dưới nắng đẹp"></div>
-        <div style="max-width:110px"><label>Thời lượng (giây)</label>
-          <input type="number" id="vidDur" value="10" min="1" max="30"></div>
-        <div style="max-width:140px"><label>Tỷ lệ</label>
-          <select id="vidSize"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>
       </div>
       <div style="margin-top:12px"><button class="primary-lg" id="vidBtn" onclick="runVideo()">Bắt đầu tạo video</button></div>
       <div class="result" id="vidRes"></div>
@@ -2263,7 +2254,7 @@ async function runImage(){
   const t0 = Date.now();
   try{
     let r = await api('/v1/images/tasks', {method:'POST',
-      body: JSON.stringify({prompt, size: $('imgSize').value, timeout:600})});
+      body: JSON.stringify({prompt, timeout:600})});
     const taskId = r.id;
     const deadline = Date.now() + 15 * 60 * 1000;
     let failures = 0;
@@ -2299,8 +2290,7 @@ async function runVideo(){
   box.innerHTML = '<span class="spin"></span>Đang tạo tác vụ video…';
   const t0 = Date.now();
   try{
-    const t = await api('/v1/videos', {method:'POST', body: JSON.stringify({
-      prompt, duration: parseInt($('vidDur').value) || 10, size: $('vidSize').value})});
+    const t = await api('/v1/videos', {method:'POST', body: JSON.stringify({prompt})});
     const tick = async () => {
       const s = await api('/v1/videos/' + t.id);
       const el = ((Date.now()-t0)/1000).toFixed(0);
@@ -2387,7 +2377,7 @@ function renderBatchDraftRows(){
     <td class="batch-prompt">${esc(job.narration||'')}</td>
     <td class="batch-prompt">${job.editing?`<label>Prompt video</label><textarea id="batch-prompt-edit-${job.index}" rows="3" oninput="rememberBatchPromptDraft(${job.index},this.value)">${esc(job.draft!=null?job.draft:job.prompt)}</textarea>${job.imageFirst&&!job.imageReferenceKey?`<label>Prompt ảnh</label><textarea id="batch-image-prompt-edit-${job.index}" rows="3" oninput="rememberBatchImagePromptDraft(${job.index},this.value)">${esc(job.imageDraft!=null?job.imageDraft:job.imagePrompt)}</textarea>`:''}<div class="acts"><button class="mini" onclick="submitBatchPromptEdit(${job.index})">Lưu sửa</button><button class="ghost mini" onclick="cancelBatchPromptEdit(${job.index})">Hủy</button></div>`:`<div class="prompt-text">${esc(job.prompt)}</div>${job.imageReferenceName?`<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>`:job.imageFirst?`<div class="hint" style="margin-top:6px">Prompt ảnh: ${esc(job.imagePrompt)}</div>`:''}`}</td>
     <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
-    <td><span class="badge info">${job.imageFirst?'Image → Video':'Text → Video'}</span><div class="mono">${esc($('batchSize').value)}${$('batchKind').value==='video'?` · ${esc($('batchDuration').value)}s`:''}</div></td>
+    <td><span class="badge info">${job.imageFirst?'Image → Video':'Text → Video'}</span></td>
     <td class="mono">—</td><td><span class="badge warn">${job.imageReady?'Ảnh sẵn · chờ Start':'Chờ Start'}</span></td>
     <td class="batch-actions"><div class="acts">${job.editing?'':`<button type="button" class="ghost mini" onclick="startBatchPromptEdit(${job.index})">Sửa prompt</button>`}${job.imageReferenceKey?`<button type="button" class="ghost mini" onclick="removeBatchImageReference(${job.index})">Xóa ảnh tham chiếu</button>`:''}<button type="button" class="danger mini" onclick="removeBatchDraftJob(${job.index})">Xóa khỏi danh sách chờ</button></div></td>
   </tr>`).join('');
@@ -2869,8 +2859,7 @@ async function retryBatchSave(index){
 function saveBatchSettings(){
   try {
     localStorage.setItem('muse2api_batch_settings_v1', JSON.stringify({
-      kind:$('batchKind').value, size:$('batchSize').value,
-      duration:$('batchDuration').value, concurrency:$('batchConcurrency').value,
+      kind:$('batchKind').value, concurrency:$('batchConcurrency').value,
       autoRetry:$('batchAutoRetry').checked,
       imagePrompts:$('batchImagePrompts').value
     }));
@@ -2883,8 +2872,6 @@ function restoreBatchSettings(){
       if (typeof saved.autoRetry === 'boolean') $('batchAutoRetry').checked = saved.autoRetry;
       if (typeof saved.imagePrompts === 'string') $('batchImagePrompts').value = saved.imagePrompts;
       if (['image','video'].includes(saved.kind)) $('batchKind').value = saved.kind;
-      if (['16:9','9:16','1:1','4:3','3:4'].includes(saved.size)) $('batchSize').value = saved.size;
-      if (['5','6','8','10'].includes(String(saved.duration))) $('batchDuration').value = String(saved.duration);
       if (Number.isInteger(Number(saved.concurrency)) && Number(saved.concurrency) > 0)
         $('batchConcurrency').value = String(Math.min(batchServerLimits.total, Number(saved.concurrency)));
     }
@@ -3056,9 +3043,9 @@ function persistBatchHistory(){
   saveBatchPromptDraft();
   try {
     localStorage.setItem(BATCH_HISTORY_STORE, JSON.stringify({next:batchNextNumber,
-      batches:batchHistory.map(batch => ({id:batch.id, kind:batch.kind, size:batch.size,
+      batches:batchHistory.map(batch => ({id:batch.id, kind:batch.kind,
         hasReference:!!batch.hasReference, referenceName:batch.referenceName || '',
-        duration:batch.duration, jobs:batch.jobs.map(job => {
+        jobs:batch.jobs.map(job => {
           const saved = {...job};
           delete saved.editing; delete saved.draft;
           return saved;
@@ -3358,11 +3345,6 @@ function parseBatchImagePrompts(){
 function updateBatchOptions(){
   const video = $('batchKind').value === 'video';
   $('batchReferenceField').style.display = video ? '' : 'none';
-  $('batchDurationField').style.display = video ? '' : 'none';
-  Array.from($('batchSize').options).forEach(option => {
-    option.disabled = video && !['16:9', '9:16', '1:1'].includes(option.value);
-  });
-  if (video && !['16:9', '9:16', '1:1'].includes($('batchSize').value)) $('batchSize').value = '16:9';
 }
 
 function batchStatusLabel(status){
@@ -3548,7 +3530,7 @@ function renderBatchJob(batch, job){
       ${job.id ? `<div class="mono">${esc(job.id)}</div>` : ''}
       ${job.accountLabel ? `<div class="mono">Tài khoản Muse: ${esc(job.accountLabel)}</div>` : ''}</td>
     <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
-    <td><span class="badge info">${job.imageFirst ? (job.imageReady ? 'Ảnh đã tạo · chờ duyệt' : job.phase === 'video' ? 'Image → Video · đang tạo video' : 'Image → Video · đang tạo ảnh') : batch.kind === 'video' ? ((batch.hasReference || job.referenceOverride) ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div>${job.referenceOverride ? `<div class="hint">Ảnh riêng: ${esc(job.referenceName || 'tham chiếu')}</div>` : (batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : '')}</td>
+    <td><span class="badge info">${job.imageFirst ? (job.imageReady ? 'Ảnh đã tạo · chờ duyệt' : job.phase === 'video' ? 'Image → Video · đang tạo video' : 'Image → Video · đang tạo ảnh') : batch.kind === 'video' ? ((batch.hasReference || job.referenceOverride) ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span>${job.referenceOverride ? `<div class="hint">Ảnh riêng: ${esc(job.referenceName || 'tham chiếu')}</div>` : (batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : '')}</td>
     <td class="mono">${job.createdAt ? fmtTime(job.createdAt) : '—'}<div>${job.elapsed ? esc(job.elapsed) + 's' : ''}</div>${job.attempt ? `<div>Lần tạo ${Number(job.attempt) + 1}</div>` : ''}</td>
     <td><span class="badge ${cls}">${esc(status)}</span>${['queued','processing'].includes(job.status) ? `<div class="mono">${progress}%</div>` : ''}
       ${job.error ? `<div class="batch-error">${esc(uiText(job.error))}</div>` : ''}
@@ -4191,14 +4173,13 @@ async function processBatchJob(batch, job, runner, accountId){
   delete job.sendQueued;
   const stage = job.imageFirst && job.phase !== 'video' ? 'image' : 'video';
   const endpoint = stage === 'image' || batch.kind === 'image' ? '/v1/images/tasks' : '/v1/videos';
-  const body = {prompt:stage === 'image' && job.imageFirst ? job.imagePrompt : job.prompt, size:batch.size, timeout:600};
+  const body = {prompt:stage === 'image' && job.imageFirst ? job.imagePrompt : job.prompt, timeout:600};
   const token = runner && runner.token;
   const executionToken = `${token}-${job.index}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   job.executionToken = executionToken;
   const alive = () => !!runner && job.runToken === token && job.executionToken === executionToken;
   // Let the server account pool assign each queued task. Pinning a worker to
   // one account can keep that account busy while other enabled accounts sit idle.
-  if (batch.kind === 'video') body.duration = batch.duration;
   try {
     if (batch.kind === 'video' && job.imageFirst && stage === 'video' && (job.generatedReference||job.imageReferenceKey)) {
       body.reference_images=[await batchGeneratedImageData(job.imageReferenceKey?'idbref:'+job.imageReferenceKey:job.generatedReference)];
@@ -4430,7 +4411,7 @@ async function runBatch(){
   if(rowNumbers.size!==rows.length)return toast('STT prompt bị trùng. Hãy dùng mỗi số thứ tự một lần.','warn');
   const batch = {
     id:'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2),
-    kind, size:$('batchSize').value, duration:Number($('batchDuration').value) || 10,
+    kind,
     concurrency:batchParallelLimit(),
     hasReference:kind==='video' && batchReferences.length>0,
     referenceImages:kind==='video' && batchReferences.length ? batchReferences.slice() : null,
@@ -4926,7 +4907,7 @@ async function executeBatchEntries(entries){
   runner.entries = entries;
   runner.owners = owners;
   owners.forEach(batch=>{batch.running=true;batch.stop=false;});
-  const controls=['batchStart','batchKind','batchSize','batchDuration','batchAddVideoPrompts','batchImagePrompts','batchAddImagePrompts','batchUpdateImagePrompts','batchImageUploadInput','batchAddUploadedImages','batchClearFolder','batchReferenceInput','batchReferenceClear'];
+  const controls=['batchStart','batchKind','batchAddVideoPrompts','batchImagePrompts','batchAddImagePrompts','batchUpdateImagePrompts','batchImageUploadInput','batchAddUploadedImages','batchClearFolder','batchReferenceInput','batchReferenceClear'];
   controls.forEach(id=>{$(id).disabled=true;}); $('batchStop').disabled=false;
   $('batchPrompts').disabled=false; $('batchUpdatePrompts').disabled=false;
   $('batchPause').disabled=false; $('batchResume').disabled=true;
@@ -5124,7 +5105,7 @@ function persistImageVideoFlow(){
     localStorage.setItem(IMAGE_VIDEO_STORE,JSON.stringify({
       flowId:imageVideoFlowId,imageMode:$('ivImageMode').value,
       imagePrompts:$('ivImagePrompts').value,videoPrompts:$('ivVideoPrompts').value,
-      size:$('ivSize').value,workers:$('ivWorkers').value,imageReferenceName:imageVideoImageReferenceName,
+      workers:$('ivWorkers').value,imageReferenceName:imageVideoImageReferenceName,
       jobs:imageVideoJobs.map(job=>{const saved={...job,editingImagePrompt:false,editingVideoPrompt:false};delete saved.uploadPreviewUrl;if(saved.imageSource==='upload')delete saved.imageUrl;return saved;})
     }));
   }catch(_){/* Keep the generation flow usable if browser storage is full. */}
@@ -5143,7 +5124,6 @@ async function restoreImageVideoFlow(){
     if(['generate','upload'].includes(saved.imageMode))$('ivImageMode').value=saved.imageMode;
     $('ivImagePrompts').value=typeof saved.imagePrompts==='string'?saved.imagePrompts:'';
     $('ivVideoPrompts').value=typeof saved.videoPrompts==='string'?saved.videoPrompts:'';
-    if(['16:9','9:16','1:1','4:3','3:4'].includes(saved.size))$('ivSize').value=saved.size;
     if(/^(?:[1-9]|10)$/.test(String(saved.workers||'')))$('ivWorkers').value=String(saved.workers);
     if(Array.isArray(saved.jobs))imageVideoJobs=saved.jobs.filter(job=>job&&typeof job.imagePrompt==='string'&&typeof job.videoPrompt==='string').slice(0,1000);
     for(const job of imageVideoJobs){
@@ -5407,7 +5387,7 @@ async function prepareUploadedImageVideoJobs(){
 }
 async function imageVideoCreateTask(stage,job){
   const video=stage==='video', endpoint=video?'/v1/videos':'/v1/images/tasks';
-  const body={prompt:video?job.videoPrompt:job.imagePrompt,size:$('ivSize').value,timeout:600};
+  const body={prompt:video?job.videoPrompt:job.imagePrompt,timeout:600};
   if(!video&&imageVideoImageReferenceName){
     const blob=await readImageVideoUpload('iv-reference:'+imageVideoFlowId);
     if(!blob)throw new Error('Không tìm thấy ảnh tham chiếu đã lưu. Hãy chọn lại ảnh.');
@@ -5415,7 +5395,7 @@ async function imageVideoCreateTask(stage,job){
   }
   if(video){
     if(job.imageSource!=='upload'&&!job.imageAccountId)throw new Error('Không có ID tài khoản đã tạo ảnh. Hãy tạo lại ảnh để ghim đúng tài khoản cho video.');
-    body.duration=8;if(job.imageAccountId)body.account_id=job.imageAccountId;body.reference_image=await imageVideoReference(job);
+    if(job.imageAccountId)body.account_id=job.imageAccountId;body.reference_image=await imageVideoReference(job);
   }
   for(let attempt=0;;attempt++){
     try{return await api(endpoint,{method:'POST',body:JSON.stringify(body)});}
@@ -5609,9 +5589,6 @@ try {
   if(savedTab&&document.querySelector(`nav.tabs button[data-t="${savedTab}"]`))goTab(savedTab);
 } catch (_) {}
 setTimeout(()=>resumeVideoAssembly().catch(error=>console.warn('Video assembly resume failed:',error)),400);
-['batchSize','batchDuration'].forEach(id => {
-  $(id).onchange = saveBatchSettings;
-});
 $('batchConcurrency').onchange = async () => {
   const select = $('batchConcurrency');
   const requested = Number(select.value);
