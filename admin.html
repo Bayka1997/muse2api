@@ -206,6 +206,20 @@
   .batch-prompt .prompt-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-weight:550}
   .batch-prompt details{font-size:12px;color:var(--muted);margin-top:5px;white-space:pre-wrap}
   .batch-prompt textarea{width:100%;min-width:220px;margin-top:0}
+  #tab-batch .batch-table{min-width:1720px;table-layout:fixed}
+  #tab-batch .batch-table th:nth-child(1),#tab-batch .batch-table td:nth-child(1){width:64px}
+  #tab-batch .batch-table th:nth-child(2),#tab-batch .batch-table td:nth-child(2){width:310px}
+  #tab-batch .batch-table th:nth-child(3),#tab-batch .batch-table td:nth-child(3){width:220px}
+  #tab-batch .batch-table th:nth-child(4),#tab-batch .batch-table td:nth-child(4){width:205px}
+  #tab-batch .batch-table th:nth-child(5),#tab-batch .batch-table td:nth-child(5){width:220px}
+  #tab-batch .batch-table th:nth-child(6),#tab-batch .batch-table td:nth-child(6){width:145px}
+  #tab-batch .batch-table th:nth-child(7),#tab-batch .batch-table td:nth-child(7){width:100px}
+  #tab-batch .batch-table th:nth-child(8),#tab-batch .batch-table td:nth-child(8){width:205px}
+  #tab-batch .batch-table th:nth-child(9),#tab-batch .batch-table td:nth-child(9){width:250px}
+  #tab-batch .batch-media{width:auto}
+  #tab-batch .batch-media video,#tab-batch .batch-media img,#tab-batch .batch-preview-btn img{width:280px;height:170px;object-fit:contain}
+  #tab-batch .batch-prompt{min-width:0;max-width:none;width:100%;overflow-wrap:anywhere}
+  #tab-batch .batch-prompt textarea{min-width:0}
   .batch-error{color:var(--bad);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px;max-width:300px}
   .batch-actions{min-width:200px}.batch-actions .acts{gap:5px}
   #batchChooseFolder{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -306,14 +320,29 @@
     <div class="card">
       <div class="batch-card-header"><h3>Chạy hàng loạt · Mỗi dòng một prompt</h3><button type="button" class="ghost mini" id="batchSetupToggle" onclick="toggleBatchSetup()" aria-expanded="false" aria-controls="batchSetupBody">Mở rộng</button></div>
       <div id="batchSetupBody" hidden>
-      <div class="hint">Dán danh sách prompt, chọn tạo ảnh hoặc video rồi bắt đầu. Dòng trống được bỏ qua; mỗi dòng còn lại tạo một tác vụ riêng. Giữ trang mở để tiếp tục gửi các dòng đang chờ.</div>
+      <div class="hint">Nhập prompt, bấm thêm vào danh sách để kiểm tra STT và chế độ chạy. Chỉ bấm Start sau khi đã chuẩn bị xong; mỗi dòng trống được bỏ qua.</div>
       <div class="row">
         <div><label>Loại nội dung</label><select id="batchKind" onchange="updateBatchOptions(); saveBatchSettings()"><option value="image">Ảnh</option><option value="video">Video</option></select></div>
         <div><label>Tỷ lệ</label><select id="batchSize"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></div>
         <div id="batchDurationField" style="display:none"><label>Thời lượng video (giây)</label><select id="batchDuration"><option>5</option><option>6</option><option>8</option><option value="10" selected>10</option></select></div>
         <div><label>Số tác vụ đồng thời</label><select id="batchConcurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10" selected>10</option></select></div>
       </div>
-      <label style="margin-top:14px">Danh sách prompt</label>
+      <label style="margin-top:14px">Prompt video (mỗi dòng theo STT)</label>
+      <textarea id="batchPrompts" rows="6" oninput="saveBatchPromptDraft()" placeholder="1. Video prompt một\n2. Video prompt hai\n3. Video prompt ba"></textarea>
+      <div class="acts" style="margin-top:8px"><button type="button" class="ghost" id="batchAddVideoPrompts" onclick="addBatchVideoPrompts()">Thêm prompt video</button><button type="button" class="ghost" id="batchUpdatePrompts" onclick="updateBatchPromptList()">Update danh sách video</button><span class="hint">Thêm vào danh sách chờ để kiểm tra; chưa bắt đầu chạy.</span></div>
+      <label for="batchNarrations" style="display:block;margin-top:10px">Danh sách thuyết minh · mỗi dòng một cảnh, cùng thứ tự với prompt video</label>
+      <textarea id="batchNarrations" rows="5" oninput="saveBatchNarrations()" placeholder="Mỗi dòng một thuyết minh"></textarea>
+      <div class="acts"><button type="button" class="ghost" onclick="importBatchNarrations()">Nạp thuyết minh vào bảng</button><span class="hint">Chỉ để đọc và đối chiếu với video; không gửi lên Muse.</span></div>
+      <label for="batchVietnamesePrompts" style="display:block;margin-top:10px">Prompt tiếng Việt để tham khảo · mỗi dòng khớp một prompt video</label>
+      <textarea id="batchVietnamesePrompts" rows="5" oninput="saveBatchVietnamesePrompts()" placeholder="Nhập prompt tiếng Việt để dễ hiểu nội dung từng cảnh"></textarea>
+      <div class="acts"><button type="button" class="ghost" onclick="importBatchVietnamesePrompts()">Nạp prompt tiếng Việt vào bảng</button><span class="hint">Cột tham khảo, không gửi lên Muse.</span></div>
+      <label for="batchImagePrompts" style="display:block;margin-top:8px">Danh sách prompt ảnh (ghi STT ở đầu mỗi dòng)</label>
+      <textarea id="batchImagePrompts" rows="4" oninput="saveBatchSettings()" placeholder="1 Prompt ảnh cho STT 1\n3 Prompt ảnh cho STT 3\n4 Prompt ảnh cho STT 4"></textarea>
+      <div class="acts" style="margin-top:8px"><button type="button" class="ghost" id="batchAddImagePrompts" onclick="addBatchImagePrompts()">Thêm prompt ảnh</button><button type="button" class="ghost" id="batchUpdateImagePrompts" onclick="updateBatchImagePromptList()">Update danh sách ảnh</button><span class="hint">Ghi STT, dấu cách, rồi prompt ảnh. Không cần dấu chấm. Ảnh tạo xong được dùng làm tham chiếu cho prompt video cùng STT.</span></div>
+      <label for="batchImageUploadInput" style="display:block;margin-top:10px">Hoặc upload ảnh tham chiếu theo STT trong tên file</label>
+      <div class="acts"><input id="batchImageUploadInput" type="file" accept="image/png,image/jpeg,image/webp" multiple><button type="button" class="ghost" id="batchAddUploadedImages" onclick="addBatchUploadedReferences()">Thêm ảnh đã upload</button></div>
+      <div class="hint">Đặt tên file theo STT, ví dụ `1.png`, `3.jpg` hoặc `ảnh 1.png`. Ảnh sẽ gắn trực tiếp vào prompt video cùng STT, bỏ qua bước tạo ảnh.</div>
+      <div class="hint">Chọn loại nội dung Video. Các STT có prompt ảnh sẽ tạo ảnh trước rồi chờ bạn duyệt; bấm Approve ở từng dòng hoặc “Chạy toàn bộ video từ ảnh” phía trên để gửi prompt video. STT không có prompt ảnh chạy text-to-video.</div>
       <div id="batchReferenceField" style="display:none;margin:12px 0">
         <label>Ảnh tham chiếu dùng chung cho toàn bộ prompt video (có thể chọn nhiều ảnh)</label>
         <input id="batchReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple onchange="chooseBatchReference(this)">
@@ -321,10 +350,6 @@
         <button id="batchReferenceClear" class="ghost mini" onclick="clearBatchReference()">Bỏ ảnh tham chiếu</button>
         <div class="hint">PNG, JPG hoặc WebP, tối đa 10 MB. Ảnh được giữ cùng đợt chạy để dùng lại khi xử lý video lỗi.</div>
       </div>
-      <textarea id="batchPrompts" rows="8" oninput="saveBatchPromptDraft(); updateBatchStartLabel()" placeholder="Một chú mèo cam đi trên bãi cỏ dưới nắng
-Một ngôi nhà gỗ giữa rừng thông
-Một thành phố tương lai dưới ánh đèn neon"></textarea>
-      <div class="acts" style="margin-top:8px"><button type="button" class="ghost" id="batchUpdatePrompts" onclick="updateBatchPromptList()">Update danh sách prompt</button><span class="hint">Update thay toàn bộ prompt theo thứ tự từ dòng 1. Trạng thái các dòng còn tương ứng được giữ nguyên; dòng thừa bị bỏ.</span></div>
       <div class="hint" id="batchConcurrencyHint">Chọn giới hạn tác vụ đồng thời toàn hệ thống từ 1 đến 10. Tăng số tác vụ có thể làm tăng mức sử dụng RAM.</div>
       <label><input type="checkbox" id="batchAutoRetry" checked onchange="saveBatchSettings()"> Tự xử lý lại video lỗi khi hàng chờ còn chỗ và đưa toàn bộ ảnh/video lỗi vào hàng chờ mỗi 20 phút</label>
       <div class="hint">Ưu tiên prompt đang chờ, lấy video đã có trước khi tạo lại. Mỗi video lỗi được tự thử lại một lần trong mỗi đợt chạy.</div>
@@ -338,16 +363,16 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
         <div class="hint" style="margin:6px 0 0">Khi đã chọn thư mục, mỗi kết quả được tự động lưu vào đó và thư mục vẫn được giữ sau khi tải lại trang. Bấm ảnh đã lưu để xem lớn. Chọn thư mục trực tiếp cần Chrome/Edge trên HTTPS hoặc localhost. Với địa chỉ HTTP trên máy chủ khác, hãy bật “Hỏi nơi lưu từng tệp” trong cài đặt tải xuống của trình duyệt.</div>
       </div>
       <div class="acts" style="margin-top:12px">
-        <button id="batchStart" class="primary-lg" onclick="runBatch()">Chạy 0 prompt</button>
+        <button id="batchStart" class="primary-lg" onclick="runBatch()">Start 0 prompt</button>
         <button id="batchPause" class="ghost" onclick="pauseBatch()" disabled>Tạm dừng</button>
         <button id="batchResume" class="primary" onclick="resumeBatch()" disabled>Chạy tiếp</button>
-        <button id="batchStop" class="danger" onclick="stopBatch()" disabled>Dừng gửi thêm</button>
+        <button id="batchStop" class="danger" onclick="stopBatch()" disabled>Stop</button>
         <button id="batchReset" class="ghost" onclick="resetBatchNumbering()" disabled>Xóa danh sách và reset STT</button>
       </div>
       <div class="hint">STT cộng dồn qua các đợt và được ghi nhớ khi tải lại trang. Sau F5, UI tự lấy trạng thái tác vụ đã gửi và cập nhật mỗi 4 giây; không gửi lại yêu cầu tạo video. Chỉ xóa danh sách/reset khi mọi tác vụ đã kết thúc và kết quả thành công đã tải xong. Thao tác này giữ nguyên tệp đã lưu và lịch sử trên máy chủ. Nếu tên file đã tồn tại sau khi reset, file mới được thêm hậu tố để tránh ghi đè.</div>
       <div id="batchSummary" class="hint" style="margin-top:14px" aria-live="polite">Chưa có đợt chạy.</div>
       <div id="batchTiming" class="hint" style="margin-top:4px" aria-live="polite"></div>
-      <div class="hint">“Dừng gửi thêm” giữ các dòng đang chờ lượt lại trong danh sách; tác vụ đã gửi vẫn tiếp tục và được theo dõi. Kết quả đã gửi cũng có trong “Lịch sử tác vụ” và “Thư viện media”.</div>
+      <div class="hint">Stop ngừng gửi các prompt đang chờ lượt; tác vụ đã gửi vẫn tiếp tục và được theo dõi. Kết quả đã gửi cũng có trong “Lịch sử tác vụ” và “Thư viện media”.</div>
       </div>
     </div>
     <div class="card">
@@ -361,6 +386,7 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
           <button class="ghost mini" id="batchFilterRecovery" onclick="setBatchFilter('recovery')">Chờ lấy lại (0)</button>
         </div>
         <input type="text" id="batchSearch" placeholder="Tìm STT hoặc prompt…" oninput="applyBatchFilter()" style="width:190px">
+        <button class="primary mini" id="batchRunAllImageVideos" onclick="runAllBatchVideosFromImages()" disabled>Chạy toàn bộ video từ ảnh</button>
         <button class="ghost mini" id="batchRetryAll" onclick="rerunBatchJobs('all')" disabled>Tạo lại tất cả</button>
         <button class="ghost mini" id="batchRetryFailed" onclick="rerunBatchJobs('failed')" disabled>Tạo lại prompt lỗi</button>
         <button class="ghost mini" id="batchCollectRendered" onclick="collectRenderedFailures()" disabled>Lấy file đã render</button>
@@ -373,7 +399,7 @@ Một thành phố tương lai dưới ánh đèn neon"></textarea>
       </div>
       <div class="hint">Các dòng mới sẽ vào “Đang chờ lượt” và được gửi dần theo số luồng đã đặt. “Nối lại bị ngắt” mở cuộc trò chuyện Muse đã tạo trước khi dịch vụ khởi động lại và tải video, không gửi prompt mới. “Tải toàn bộ video chưa tải” lưu mọi video đã hoàn tất nhưng chưa có file trên máy. “Xóa đã xong” chỉ xóa dòng đã tạo thành công và tải/lưu xong. “Xóa toàn bộ” xóa danh sách và reset STT. Các tệp trên máy chủ và máy bạn được giữ lại. “Lấy lại video” mở đúng cuộc trò chuyện để tải video Muse đã tạo, không gửi prompt mới. “Tạo lại” đưa prompt vào hàng chờ để gửi mới. “Sửa prompt” đổi nội dung dòng đó rồi đưa vào hàng chờ.</div>
       <div class="tblwrap"><table class="batch-table">
-        <thead><tr><th>STT</th><th>Media</th><th>Prompt</th><th>Chế độ</th><th>Thời gian</th><th>Trạng thái / Lỗi</th><th>Thao tác</th></tr></thead>
+        <thead><tr><th>STT</th><th>Media / Video</th><th>Thuyết minh</th><th>Prompt</th><th>Prompt tiếng Việt</th><th>Chế độ</th><th>Thời gian</th><th>Trạng thái / Lỗi</th><th>Thao tác</th></tr></thead>
         <tbody id="batchResults" aria-live="polite"></tbody>
       </table></div>
     </div>
@@ -2308,6 +2334,189 @@ let batchDirectory = null;
 let batchReferences = [];
 let batchReferenceLoading = false;
 let batchReferenceSelection = 0;
+let batchDraftJobs = [];
+const batchUploadPreviews = new Map();
+
+function cacheBatchUploadPreview(key,blob){
+  if(!key||!blob||typeof URL.createObjectURL!=='function')return;
+  const old=batchUploadPreviews.get(key);if(old)revokePreviewUrl(old);
+  batchUploadPreviews.set(key,URL.createObjectURL(blob));
+}
+
+function hydrateBatchUploadPreview(key){
+  if(!key||batchUploadPreviews.has(key))return;
+  readImageVideoUpload(key).then(blob=>{
+    if(!blob||batchUploadPreviews.has(key))return;
+    cacheBatchUploadPreview(key,blob);
+    const draft=batchDraftJobs.find(job=>job.imageReferenceKey===key);
+    if(draft)renderBatchDraftList();
+    else {const found=batchEntries().find(({job})=>job.imageReferenceKey===key);if(found)renderBatchJob(found.batch,found.job);}
+  }).catch(()=>{});
+}
+
+function dropBatchUploadPreview(key){
+  const url=batchUploadPreviews.get(key);if(url)revokePreviewUrl(url);batchUploadPreviews.delete(key);
+}
+
+function persistBatchDraft(){
+  try { localStorage.setItem('muse2api_batch_draft_v1',JSON.stringify(batchDraftJobs.map(job=>{const saved={...job};delete saved.editing;delete saved.draft;delete saved.imageDraft;return saved;}))); }
+  catch(_) {}
+}
+
+function restoreBatchDraft(){
+  try {
+    const saved=JSON.parse(localStorage.getItem('muse2api_batch_draft_v1')||'[]');
+    if(Array.isArray(saved))batchDraftJobs=saved.filter(job=>job&&Number.isSafeInteger(job.promptNumber)&&typeof job.prompt==='string').slice(0,1000).map(job=>{delete job.editing;delete job.draft;delete job.imageDraft;return job;});
+  } catch(_) { batchDraftJobs=[]; }
+  batchDraftJobs.forEach(job=>hydrateBatchUploadPreview(job.imageReferenceKey));
+  renderBatchDraftList();
+}
+
+function renderBatchDraftList(){
+  batchDraftJobs.forEach((job,index)=>{job.index=batchNextNumber-1+index;});
+  persistBatchDraft();renderBatchDraftRows();updateBatchStartLabel();
+}
+
+function renderBatchDraftRows(){
+  const tbody=$('batchResults');
+  if(!tbody)return;
+  tbody.querySelectorAll('tr[data-batch-draft="1"]').forEach(row=>row.remove());
+  const rows=batchDraftJobs.map(job=>`<tr id="batch-draft-${job.index}" data-batch-draft="1">
+    <td class="mono">${String(job.promptNumber).padStart(3,'0')}</td>
+    <td class="batch-media">${job.imageReferenceKey&&batchUploadPreviews.has(job.imageReferenceKey)?`<img src="${esc(batchUploadPreviews.get(job.imageReferenceKey))}" alt="Ảnh tham chiếu STT ${job.promptNumber}" title="${esc(job.imageReferenceName||'Ảnh upload')}">`:job.imageReferenceName?`<span class="hint">Ảnh upload: ${esc(job.imageReferenceName)}</span>`:'<span class="hint">Chưa chạy</span>'}</td>
+    <td class="batch-prompt">${esc(job.narration||'')}</td>
+    <td class="batch-prompt">${job.editing?`<label>Prompt video</label><textarea id="batch-prompt-edit-${job.index}" rows="3" oninput="rememberBatchPromptDraft(${job.index},this.value)">${esc(job.draft!=null?job.draft:job.prompt)}</textarea>${job.imageFirst&&!job.imageReferenceKey?`<label>Prompt ảnh</label><textarea id="batch-image-prompt-edit-${job.index}" rows="3" oninput="rememberBatchImagePromptDraft(${job.index},this.value)">${esc(job.imageDraft!=null?job.imageDraft:job.imagePrompt)}</textarea>`:''}<div class="acts"><button class="mini" onclick="submitBatchPromptEdit(${job.index})">Lưu sửa</button><button class="ghost mini" onclick="cancelBatchPromptEdit(${job.index})">Hủy</button></div>`:`<div class="prompt-text">${esc(job.prompt)}</div>${job.imageReferenceName?`<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>`:job.imageFirst?`<div class="hint" style="margin-top:6px">Prompt ảnh: ${esc(job.imagePrompt)}</div>`:''}`}</td>
+    <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
+    <td><span class="badge info">${job.imageFirst?'Image → Video':'Text → Video'}</span><div class="mono">${esc($('batchSize').value)}${$('batchKind').value==='video'?` · ${esc($('batchDuration').value)}s`:''}</div></td>
+    <td class="mono">—</td><td><span class="badge warn">${job.imageReady?'Ảnh sẵn · chờ Start':'Chờ Start'}</span></td>
+    <td class="batch-actions"><div class="acts">${job.editing?'':`<button type="button" class="ghost mini" onclick="startBatchPromptEdit(${job.index})">Sửa prompt</button>`}${job.imageReferenceKey?`<button type="button" class="ghost mini" onclick="removeBatchImageReference(${job.index})">Xóa ảnh tham chiếu</button>`:''}<button type="button" class="danger mini" onclick="removeBatchDraftJob(${job.index})">Xóa khỏi danh sách chờ</button></div></td>
+  </tr>`).join('');
+  tbody.insertAdjacentHTML('beforeend',rows);
+}
+
+async function removeBatchDraftJob(index){
+  const position=batchDraftJobs.findIndex(job=>job.index===index);
+  if(position<0)return;
+  await deleteBatchDraftUpload(batchDraftJobs[position].imageReferenceKey);
+  batchDraftJobs.splice(position,1);
+  renderBatchDraftList();
+}
+
+function batchDraftJobByIndex(index){return batchDraftJobs.find(job=>job.index===index)||null;}
+
+async function removeBatchImageReference(index){
+  const draft=batchDraftJobByIndex(index);
+  const found=batchJobByIndex(index);
+  const job=draft||found&&found.job;
+  if(!job||!job.imageReferenceKey)return;
+  if(['submitting','queued','processing','running'].includes(job.status))return toast('Dừng tác vụ đang chạy trước khi xóa ảnh tham chiếu.','warn');
+  await deleteBatchDraftUpload(job.imageReferenceKey);
+  job.imageReferenceKey='';job.imageReferenceName='';job.imageFirst=false;job.imageReady=false;job.imagePrompt='';
+  delete job.generatedReference;delete job.imageUrl;delete job.phase;
+  if(job.status==='image_ready')job.status='stopped';
+  if(draft)renderBatchDraftList();else{persistBatchHistory();renderBatchJob(found.batch,job);}
+  toast(`Đã xóa ảnh tham chiếu ở STT ${job.promptNumber||batchDisplayNumber(job)}. Có thể thêm prompt ảnh cho STT này.`,'ok');
+}
+
+function addBatchVideoPrompts(){
+  const rows=parseBatchPromptRows($('batchPrompts').value);
+  if(!rows.length)return toast('Nhập prompt video trước khi thêm vào danh sách.','warn');
+  if($('batchKind').value!=='video')return toast('Chọn loại nội dung Video cho danh sách này.','warn');
+  const numbers=new Set(rows.map(row=>row.promptNumber));
+  if(numbers.size!==rows.length)return toast('STT prompt video bị trùng. Hãy dùng mỗi STT một lần.','warn');
+  for(const row of rows){
+    const existing=batchDraftJobs.find(job=>job.promptNumber===row.promptNumber);
+    if(existing)existing.prompt=row.prompt;
+    else batchDraftJobs.push({prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:false,imagePrompt:''});
+  }
+  batchDraftJobs.sort((a,b)=>a.promptNumber-b.promptNumber);
+  renderBatchDraftList();
+  toast(`Đã thêm/cập nhật ${rows.length} prompt video vào danh sách chờ. Bấm Start để chạy.`,'ok');
+}
+
+function addBatchImagePrompts(){
+  let imagePrompts;
+  try { imagePrompts=parseBatchImagePrompts(); }
+  catch(error) { return toast(error.message,'warn'); }
+  if(!imagePrompts.size)return toast('Nhập prompt ảnh có STT trước khi thêm.','warn');
+  const missing=[...imagePrompts.keys()].filter(number=>!batchDraftJobs.some(job=>job.promptNumber===number));
+  if(missing.length)return toast(`Hãy thêm prompt video trước cho STT ${missing.join(', ')}.`,'warn');
+  const conflicts=[...imagePrompts.keys()].filter(number=>batchDraftJobs.some(job=>job.promptNumber===number&&job.imageReferenceKey));
+  if(conflicts.length)return toast(`STT ${conflicts.join(', ')} đang dùng ảnh upload. Xóa ảnh tham chiếu ở các dòng đó trước khi thêm prompt ảnh.`,'warn');
+  for(const job of batchDraftJobs){
+    if(job.imageReferenceKey)continue;
+    const nextPrompt=imagePrompts.get(job.promptNumber)||'';
+    if(job.imagePrompt!==nextPrompt || job.imageFirst!==imagePrompts.has(job.promptNumber)){
+      delete job.generatedReference;delete job.imageUrl;delete job.phase;
+      job.imageReady=false;
+    }
+    job.imageFirst=imagePrompts.has(job.promptNumber);
+    job.imagePrompt=nextPrompt;
+  }
+  renderBatchDraftList();
+  toast(`Đã thay danh sách prompt ảnh bằng ${imagePrompts.size} STT mới; các STT ảnh cũ đã được gỡ. Bấm Start để chạy.`,'ok');
+}
+
+async function storeBatchDraftUpload(file,promptNumber){
+  const opened=await openFolderStore('readwrite');
+  if(!opened)throw new Error('Trình duyệt không hỗ trợ lưu ảnh tham chiếu.');
+  const key=`batch-upload:${Date.now()}:${promptNumber}:${Math.random().toString(36).slice(2)}`;
+  try{
+    opened.store.put(file,key);
+    await new Promise((resolve,reject)=>{opened.tx.oncomplete=resolve;opened.tx.onerror=()=>reject(new Error('Không lưu được ảnh upload.'));opened.tx.onabort=()=>reject(new Error('Không lưu được ảnh upload.'));});
+    return key;
+  }finally{opened.db.close();}
+}
+
+async function deleteBatchDraftUpload(key){
+  if(!key)return;
+  dropBatchUploadPreview(key);
+  try{const opened=await openFolderStore('readwrite');if(!opened)return;opened.store.delete(key);await new Promise(resolve=>{opened.tx.oncomplete=resolve;opened.tx.onerror=resolve;opened.tx.onabort=resolve;});opened.db.close();}catch(_){}
+}
+
+function removeBatchImagePromptsForNumbers(numbers){
+  const blocked=new Set(numbers);
+  const remaining=$('batchImagePrompts').value.split(/\r?\n/).filter(line=>{
+    const match=line.trim().match(/^(\d+)(?:\s*[.)]\s*|\s+)(.+)$/);
+    return !match||!blocked.has(Number(match[1]));
+  });
+  $('batchImagePrompts').value=remaining.join('\n');
+  saveBatchSettings();
+}
+
+async function addBatchUploadedReferences(){
+  const input=$('batchImageUploadInput');
+  const files=Array.from(input.files||[]);
+  if(!files.length)return toast('Chọn ảnh có tên file bắt đầu bằng STT, ví dụ 1.png.','warn');
+  if($('batchKind').value!=='video')return toast('Chọn loại nội dung Video để dùng ảnh làm tham chiếu.','warn');
+  const picked=[],seen=new Set();
+  for(const file of files){
+    const match=file.name.match(/^(?:(?:anh|ảnh)\s*)?(\d+)\.(png|jpe?g|webp)$/i);
+    if(!match)return toast(`Tên file không đúng STT hoặc định dạng: ${file.name}. Dùng ví dụ 1.png, 3.jpg hoặc ảnh 4.webp.`,'warn');
+    const promptNumber=Number(match[1]);
+    if(!Number.isSafeInteger(promptNumber)||promptNumber<1||seen.has(promptNumber))return toast(`STT ảnh không hợp lệ hoặc bị lặp: ${file.name}`,'warn');
+    if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024)return toast(`${file.name}: chỉ nhận PNG, JPG hoặc WebP tối đa 10 MB.`,'warn');
+    if(!batchDraftJobs.some(job=>job.promptNumber===promptNumber))return toast(`Chưa có prompt video STT ${promptNumber}. Hãy thêm prompt video trước.`,'warn');
+    seen.add(promptNumber);picked.push({file,promptNumber});
+  }
+  const stored=[];
+  batchReferenceLoading=true;
+  try{
+    for(const item of picked){item.key=await storeBatchDraftUpload(item.file,item.promptNumber);stored.push(item.key);}
+  }catch(error){await Promise.all(stored.map(deleteBatchDraftUpload));return toast(error.message,'bad');}
+  finally{batchReferenceLoading=false;}
+  for(const item of picked){
+    const job=batchDraftJobs.find(candidate=>candidate.promptNumber===item.promptNumber);
+    if(job.imageReferenceKey)await deleteBatchDraftUpload(job.imageReferenceKey);
+    cacheBatchUploadPreview(item.key,item.file);
+    job.imageFirst=true;job.imagePrompt='';job.imageReady=true;job.phase='approval';
+    job.imageReferenceKey=item.key;job.imageReferenceName=item.file.name;
+    job.generatedReference='';job.imageUrl='';
+  }
+  removeBatchImagePromptsForNumbers(picked.map(item=>item.promptNumber));
+  input.value='';renderBatchDraftList();
+  toast(`Đã gắn ${picked.length} ảnh upload theo STT. Sau Start, bấm Approve để tạo video.`,'ok');
+}
 
 async function chooseBatchReference(input){
   if (batchIsBusy()) return;
@@ -2379,6 +2588,25 @@ async function readBatchJobReference(batch, job){
     if (!data) throw new Error('Ảnh tham chiếu đã mất. Hãy chọn lại ảnh khi sửa prompt.');
     return data;
   } finally { opened.db.close(); }
+}
+
+async function batchGeneratedImageData(url){
+  if(String(url||'').startsWith('idbref:')){
+    const blob=await readImageVideoUpload(String(url).slice(7));
+    if(!blob)throw new Error('Không tìm thấy ảnh upload đã lưu. Hãy upload lại ảnh theo STT.');
+    return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Không đọc được ảnh upload.'));reader.readAsDataURL(blob);});
+  }
+  const safeUrl=safeBatchMediaUrl(url);
+  if(!safeUrl)throw new Error('Ảnh tạo trước không có liên kết hợp lệ.');
+  const response=await fetch(safeUrl,{credentials:'same-origin'});
+  if(!response.ok)throw new Error('Không tải được ảnh vừa tạo để chuyển làm ảnh tham chiếu.');
+  const blob=await response.blob();
+  return await new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result);
+    reader.onerror=()=>reject(new Error('Không đọc được ảnh vừa tạo.'));
+    reader.readAsDataURL(blob);
+  });
 }
 async function readImageVideoUpload(key){
   const opened=await openFolderStore('readonly');
@@ -2643,7 +2871,8 @@ function saveBatchSettings(){
     localStorage.setItem('muse2api_batch_settings_v1', JSON.stringify({
       kind:$('batchKind').value, size:$('batchSize').value,
       duration:$('batchDuration').value, concurrency:$('batchConcurrency').value,
-      autoRetry:$('batchAutoRetry').checked
+      autoRetry:$('batchAutoRetry').checked,
+      imagePrompts:$('batchImagePrompts').value
     }));
   } catch (error) { console.warn('Cannot save batch settings'); }
 }
@@ -2652,6 +2881,7 @@ function restoreBatchSettings(){
     const saved = JSON.parse(localStorage.getItem('muse2api_batch_settings_v1') || 'null');
     if (saved) {
       if (typeof saved.autoRetry === 'boolean') $('batchAutoRetry').checked = saved.autoRetry;
+      if (typeof saved.imagePrompts === 'string') $('batchImagePrompts').value = saved.imagePrompts;
       if (['image','video'].includes(saved.kind)) $('batchKind').value = saved.kind;
       if (['16:9','9:16','1:1','4:3','3:4'].includes(saved.size)) $('batchSize').value = saved.size;
       if (['5','6','8','10'].includes(String(saved.duration))) $('batchDuration').value = String(saved.duration);
@@ -2686,6 +2916,26 @@ function saveBatchPromptDraft(){
   try { localStorage.setItem('muse2api_batch_prompt_draft', $('batchPrompts').value); }
   catch (error) { toast('Không lưu được bản nháp prompt trong trình duyệt.', 'warn'); }
 }
+function saveBatchNarrations(){try{localStorage.setItem('muse2api_batch_narrations',$('batchNarrations').value);}catch(_){}}
+function restoreBatchNarrations(){try{$('batchNarrations').value=localStorage.getItem('muse2api_batch_narrations')||'';}catch(_){}}
+function saveBatchVietnamesePrompts(){try{localStorage.setItem('muse2api_batch_vietnamese_prompts',$('batchVietnamesePrompts').value);}catch(_){}}
+function restoreBatchVietnamesePrompts(){try{$('batchVietnamesePrompts').value=localStorage.getItem('muse2api_batch_vietnamese_prompts')||'';}catch(_){}}
+function importBatchNarrations(){
+  const lines=$('batchNarrations').value.replace(/\r/g,'').split('\n');
+  const items=[...batchEntries().map(entry=>entry.job),...batchDraftJobs].sort((a,b)=>batchDisplayNumber(a)-batchDisplayNumber(b));
+  if(!items.length)return toast('Hãy thêm prompt vào danh sách trước khi nạp thuyết minh.','warn');
+  items.forEach((job,index)=>{job.narration=lines[index]||'';});
+  persistBatchDraft();persistBatchHistory();renderBatchDraftRows();rebuildBatchTable();
+  toast(`Đã nạp ${Math.min(lines.length,items.length)} dòng thuyết minh vào bảng; nội dung chỉ để đối chiếu.`,'ok');
+}
+function importBatchVietnamesePrompts(){
+  const lines=$('batchVietnamesePrompts').value.replace(/\r/g,'').split('\n');
+  const items=[...batchEntries().map(entry=>entry.job),...batchDraftJobs].sort((a,b)=>batchDisplayNumber(a)-batchDisplayNumber(b));
+  if(!items.length)return toast('Hãy thêm prompt vào danh sách trước khi nạp bản tiếng Việt.','warn');
+  items.forEach((job,index)=>{job.vietnamesePrompt=lines[index]||'';});
+  persistBatchDraft();persistBatchHistory();renderBatchDraftRows();rebuildBatchTable();
+  toast(`Đã nạp bản tiếng Việt cho ${Math.min(lines.length,items.length)} dòng để tham khảo.`,'ok');
+}
 function restoreBatchPromptDraft(){
   try {
     const draft = localStorage.getItem('muse2api_batch_prompt_draft');
@@ -2694,31 +2944,113 @@ function restoreBatchPromptDraft(){
   } catch (error) { console.warn('Cannot restore prompt draft'); }
 }
 function updateBatchPromptList(){
-  if (batchSending() || batchRestarting || batchRecoveringVideos)
-    return toast('Hãy tạm dừng hoặc dừng hàng chờ trước khi cập nhật prompt.','warn');
-  const prompts=splitBatchPrompts($('batchPrompts').value);
+  if (batchRestarting || batchRecoveringVideos)
+    return toast('Hãy đợi thao tác khôi phục kết thúc trước khi cập nhật prompt.','warn');
+  const rows=parseBatchPromptRows($('batchPrompts').value);
+  const prompts=rows.map(row=>row.prompt);
   if (!prompts.length) return toast('Hãy dán ít nhất một prompt trước khi cập nhật.','warn');
+  let imageFirstNumbers;
+  try { imageFirstNumbers=parseBatchImagePrompts(); }
+  catch(error) { return toast(error.message,'warn'); }
+  const uploadedNumbers=new Set([
+    ...batchDraftJobs.filter(job=>job.imageReferenceKey).map(job=>job.promptNumber),
+    ...batchEntries().filter(({job})=>job.imageReferenceKey).map(({job})=>job.promptNumber||batchDisplayNumber(job))
+  ]);
+  const conflicts=[...imageFirstNumbers.keys()].filter(number=>uploadedNumbers.has(number));
+  if(conflicts.length)return toast(`STT ${conflicts.join(', ')} đang dùng ảnh upload. Xóa ảnh tham chiếu trước khi thêm prompt ảnh.`,'warn');
+  if(batchDraftJobs.length){
+    const staged=new Map(batchDraftJobs.map(job=>[job.promptNumber,job]));
+    if(new Set(rows.map(row=>row.promptNumber)).size!==rows.length)return toast('STT prompt video bị trùng.','warn');
+    const missing=[...imageFirstNumbers.keys()].filter(number=>!rows.some(row=>row.promptNumber===number));
+    if(missing.length)return toast(`Không có prompt video STT ${missing.join(', ')} để gắn prompt ảnh.`,'warn');
+    batchDraftJobs=rows.map(row=>{const old=staged.get(row.promptNumber);return {...old,prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:imageFirstNumbers.has(row.promptNumber)||!!(old&&old.imageFirst),imagePrompt:imageFirstNumbers.get(row.promptNumber)||(old&&old.imagePrompt)||''};});
+    renderBatchDraftList();toast(`Đã cập nhật danh sách chờ thành ${rows.length} prompt video.`,'ok');return;
+  }
   if (batchEntries().some(({job})=>job.saveState==='saving'))
     return toast('Hãy đợi lưu xong các tệp trước khi thay danh sách prompt.','warn');
   const entries=batchEntries();
-  if (!entries.length) return toast('Chưa có đợt chạy để cập nhật. Bấm “Chạy” để tạo đợt mới.','warn');
   const target=batchHistory[batchHistory.length-1];
   const jobs=entries.map(entry=>entry.job);
+  const running=batchSending();
+  if (running && prompts.length !== jobs.length)
+    return toast('Khi hàng chờ đang chạy, chỉ có thể sửa prompt chưa gửi và giữ nguyên số dòng.','warn');
+  if (running && jobs.some(job=>job.saveState==='saving'))
+    return toast('Hãy đợi lưu xong các tệp trước khi cập nhật prompt.','warn');
   for(let i=0;i<Math.min(prompts.length,jobs.length);i++){
     const job=jobs[i];
+    if (running && !['waiting','stopped'].includes(job.status)) continue;
     job.prompt=prompts[i];
+    job.promptNumber=rows[i].promptNumber;
+    const nextImageFirst=target.kind==='video' && (imageFirstNumbers.has(rows[i].promptNumber)||!!job.imageFirst);
+    const nextImagePrompt=imageFirstNumbers.get(rows[i].promptNumber) || job.imagePrompt || '';
+    if(job.imageFirst!==nextImageFirst || job.imagePrompt!==nextImagePrompt){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+    job.imageFirst=nextImageFirst;
+    job.imagePrompt=nextImagePrompt;
     if(['waiting','stopped'].includes(job.status)&&!job.id){job.status='waiting';job.progress=0;job.error='';}
     delete job.draft;
   }
-  if(prompts.length<jobs.length){
+  if(!running && prompts.length<jobs.length){
     const remove=new Set(jobs.slice(prompts.length));
     batchHistory.forEach(batch=>batch.jobs=batch.jobs.filter(job=>!remove.has(job)));
-  }else if(prompts.length>jobs.length){
-    for(const prompt of prompts.slice(jobs.length))
-      target.jobs.push({prompt,index:batchNextNumber++,status:'waiting',progress:0,createdAt:Math.floor(Date.now()/1000)});
+  }else if(!running && prompts.length>jobs.length){
+    for(const row of rows.slice(jobs.length))
+      target.jobs.push({prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:target.kind==='video' && imageFirstNumbers.has(row.promptNumber),imagePrompt:imageFirstNumbers.get(row.promptNumber)||'',index:batchNextNumber++,status:'waiting',progress:0,createdAt:Math.floor(Date.now()/1000)});
   }
   persistBatchHistory();rebuildBatchTable();
-  toast(`Đã thay danh sách prompt thành ${prompts.length} dòng. Các dòng còn lại giữ nguyên trạng thái.`,'ok');
+  updateBatchResumeButton();
+  toast(running ? 'Đã cập nhật các prompt chưa gửi; prompt đang chạy được giữ nguyên.' : `Đã thay danh sách prompt thành ${prompts.length} dòng. Các dòng còn lại giữ nguyên trạng thái.`,'ok');
+}
+function updateBatchImagePromptList(){
+  if(batchSending()||batchRestarting||batchRecoveringVideos)
+    return toast('Hãy tạm dừng hoặc dừng hàng chờ trước khi cập nhật prompt ảnh.','warn');
+  let imagePrompts;
+  try { imagePrompts=parseBatchImagePrompts(); }
+  catch(error) { return toast(error.message,'warn'); }
+  if(batchDraftJobs.length){
+    const videoNumbers=new Set(batchDraftJobs.map(job=>job.promptNumber));
+    const missing=[...imagePrompts.keys()].filter(number=>!videoNumbers.has(number));
+    if(missing.length)return toast(`Hãy thêm prompt video trước cho STT ${missing.join(', ')}.`,'warn');
+    const conflicts=[...imagePrompts.keys()].filter(number=>batchDraftJobs.some(job=>job.promptNumber===number&&job.imageReferenceKey));
+    if(conflicts.length)return toast(`STT ${conflicts.join(', ')} đang dùng ảnh upload. Xóa ảnh tham chiếu ở các dòng đó trước khi thêm prompt ảnh.`,'warn');
+    for(const job of batchDraftJobs){
+      if(job.imageReferenceKey)continue;
+      const nextPrompt=imagePrompts.get(job.promptNumber)||'';
+      if(job.imagePrompt!==nextPrompt||job.imageFirst!==imagePrompts.has(job.promptNumber)){delete job.generatedReference;delete job.imageUrl;delete job.phase;job.imageReady=false;}
+      job.imageFirst=imagePrompts.has(job.promptNumber);job.imagePrompt=nextPrompt;
+    }
+    renderBatchDraftList();toast(`Đã cập nhật ${imagePrompts.size} prompt ảnh trong danh sách chờ.`,'ok');return;
+  }
+  if(batchEntries().some(({job})=>job.saveState==='saving'))
+    return toast('Hãy đợi lưu xong các tệp trước khi cập nhật prompt ảnh.','warn');
+  const entries=batchEntries();
+  if(!entries.length){
+    if(!batchDraftJobs.length)return toast('Hãy thêm prompt video vào danh sách chờ trước.','warn');
+    const videoNumbers=new Set(batchDraftJobs.map(job=>job.promptNumber));
+    const missing=[...imagePrompts.keys()].filter(number=>!videoNumbers.has(number));
+    if(missing.length)return toast(`Hãy thêm prompt video trước cho STT ${missing.join(', ')}.`,'warn');
+    for(const job of batchDraftJobs){job.imageFirst=imagePrompts.has(job.promptNumber);job.imagePrompt=imagePrompts.get(job.promptNumber)||'';}
+    renderBatchDraftList();
+    toast(`Đã cập nhật ${imagePrompts.size} prompt ảnh trong danh sách chờ.`,'ok');
+    return;
+  }
+  const videoNumbers=new Set(entries.map(({job})=>job.promptNumber || batchDisplayNumber(job)));
+  const missing=[...imagePrompts.keys()].filter(number=>!videoNumbers.has(number));
+  if(missing.length)return toast(`Không tìm thấy prompt video STT ${missing.join(', ')}.`,'warn');
+  const conflicts=[...imagePrompts.keys()].filter(number=>entries.some(({job})=>(job.promptNumber||batchDisplayNumber(job))===number&&job.imageReferenceKey));
+  if(conflicts.length)return toast(`STT ${conflicts.join(', ')} đang dùng ảnh upload. Xóa ảnh tham chiếu ở các dòng đó trước khi thêm prompt ảnh.`,'warn');
+  for(const {batch,job} of entries){
+    const number=job.promptNumber || batchDisplayNumber(job);
+    if(job.imageReferenceKey)continue;
+    const nextImageFirst=batch.kind==='video'&&imagePrompts.has(number);
+    const nextImagePrompt=imagePrompts.get(number)||'';
+    if(job.imageFirst!==nextImageFirst||job.imagePrompt!==nextImagePrompt){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+    if(job.imageFirst!==nextImageFirst)job.imageReady=false;
+    job.imageFirst=nextImageFirst;
+    job.imagePrompt=nextImagePrompt;
+    if(!job.imageFirst){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+  }
+  persistBatchHistory();rebuildBatchTable();
+  toast(`Đã cập nhật ${imagePrompts.size} prompt ảnh theo STT.`,'ok');
 }
 function persistBatchHistory(){
   saveBatchPromptDraft();
@@ -2735,11 +3067,13 @@ function persistBatchHistory(){
 }
 
 function updateBatchStartLabel(){
-  const count = splitBatchPrompts($('batchPrompts').value).length;
-  const nextDisplayNumber = batchEntries().length + 1;
+  const count = batchDraftJobs.length;
   const running = batchHistory.some(batch => batch.running);
-  $('batchStart').textContent = running ? 'Đang chạy…' : `Chạy ${count} prompt` + (count ? ` (STT ${nextDisplayNumber}–${nextDisplayNumber + count - 1})` : '');
+  $('batchStart').textContent = running ? 'Đang chạy…' : `Start ${count} prompt`;
   $('batchStart').disabled = running || count === 0;
+  updateBatchResumeButton();
+  const readyVideos=batchEntries().filter(({job})=>job.imageFirst&&job.imageReady&&(job.generatedReference||job.imageReferenceKey)&&!['completed','submitting','queued','processing','running'].includes(job.status)).length;
+  $('batchRunAllImageVideos').disabled=readyVideos===0;
   const jobs = batchHistory.flatMap(batch => batch.jobs);
   $('batchReset').disabled = running || !jobs.length || jobs.some(job =>
     !['completed','failed','stopped'].includes(job.status) || job.saveState === 'saving' ||
@@ -2750,8 +3084,10 @@ function resetBatchNumbering(){
   updateBatchStartLabel();
   if ($('batchReset').disabled) return;
   clearLocalBatchPreviews();
+  batchEntries().forEach(({job})=>deleteBatchDraftUpload(job.imageReferenceKey));
   batchHistory = []; activeBatch = null; batchNextNumber = 1; batchFilter='all'; $('batchSearch').value='';
   $('batchPrompts').value = ''; $('batchResults').innerHTML = '';
+  batchDraftJobs=[];persistBatchDraft();renderBatchDraftList();
   $('batchSummary').textContent = 'Đã xóa danh sách. Đợt tiếp theo bắt đầu từ STT 1; tệp đã lưu vẫn được giữ.';
   persistBatchHistory(); updateBatchStartLabel(); updateBatchListControls();
 }
@@ -2863,11 +3199,12 @@ function confirmBatchDownload(index){
 async function checkBatchResult(index){
   const batch = batchHistory.find(item => item.jobs.some(job => job.index === index));
   const job = batch && batch.jobs.find(item => item.index === index);
-  if (!batch || !job || !job.id || job.checking || (batch.kind === 'video' && !batchTabIsActive())) return;
+  if (!batch || !job || job.manuallyCompleted || !job.id || job.checking || (batch.kind === 'video' && !batchTabIsActive())) return;
   job.checking = true;
   try {
     const endpoint = batch.kind === 'image' ? '/v1/images/tasks/' : '/v1/videos/';
     const result = await api(endpoint + encodeURIComponent(job.id));
+    if (job.manuallyCompleted) return;
     rememberBatchAccount(job, result);
     job.contextPending = false;
     if (['completed','succeeded'].includes(result.status)) {
@@ -2892,6 +3229,7 @@ async function checkBatchResult(index){
     }
     if (['completed','failed'].includes(job.status)) job.recovering = false;
   } catch (error) {
+    if (job.manuallyCompleted) return;
     job.error = 'Không lấy được trạng thái; sẽ tự kiểm tra lại. ' + error.message;
     if (error.status === 404) {
       job.status = 'unconfirmed'; job.recovering = false; job.contextPending = false;
@@ -2913,7 +3251,7 @@ function restoreBatchHistory(){
       batchHistory = saved.batches.filter(batch => batch && Array.isArray(batch.jobs) && ['image','video'].includes(batch.kind)).map(batch => {
         batch.jobs = batch.jobs.filter(job => job && Number.isSafeInteger(job.index) && job.index >= 0 && !used.has(job.index) && (used.add(job.index), true)).map(job => {
           if (job.status === 'waiting') job.status = 'stopped';
-          else if (!['completed','failed','stopped','queued','processing','running'].includes(job.status)) job.status = 'unconfirmed';
+          else if (!['completed','failed','stopped','queued','processing','running','image_ready'].includes(job.status)) job.status = 'unconfirmed';
           // A restored in-flight task lost its page-side watcher. Make it available
           // to the reconnect action, which checks the existing task without resubmitting.
           if (job.id && ['queued','processing','running'].includes(job.status)) job.interrupted = true;
@@ -2942,6 +3280,7 @@ function restoreBatchHistory(){
         ...batchHistory.flatMap(batch => batch.jobs.map(job => job.index + 2)));
       $('batchResults').innerHTML = batchHistory.flatMap(batch => batch.jobs.map(job => `<tr id="batch-job-${job.index}"></tr>`)).join('');
       batchHistory.forEach(batch => batch.jobs.forEach(job => renderBatchJob(batch, job)));
+      batchHistory.forEach(batch=>batch.jobs.forEach(job=>hydrateBatchUploadPreview(job.imageReferenceKey)));
     }
   } catch (_) { batchHistory = []; batchNextNumber = 1; }
   updateBatchStartLabel(); updateBatchListControls();
@@ -2989,6 +3328,33 @@ function splitBatchPrompts(text){
   return text.split(/\r?\n/).map(prompt => prompt.trim()).filter(Boolean);
 }
 
+function parseBatchPromptRows(text){
+  let rowNumber=0;
+  return text.split(/\r?\n/).map(line=>{
+    const raw=line.trim();
+    if(!raw)return null;
+    rowNumber++;
+    const numbered=raw.match(/^(\d+)\s*[.)]\s*(.*)$/);
+    const prompt=numbered ? numbered[2].trim() : raw;
+    if(!prompt)return null;
+    return {prompt, promptNumber:numbered ? Number(numbered[1]) : rowNumber};
+  }).filter(Boolean);
+}
+
+function parseBatchImagePrompts(){
+  const lines=$('batchImagePrompts').value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+  const imagePrompts=new Map();
+  for(const line of lines){
+    const match=line.match(/^(\d+)(?:\s*[.)]\s*|\s+)(.+)$/);
+    if(!match)throw new Error(`Mỗi prompt ảnh cần STT, dấu cách, rồi prompt, ví dụ: 1 ${line}`);
+    const number=Number(match[1]),prompt=match[2].trim();
+    if(!Number.isSafeInteger(number)||number<1)throw new Error(`STT prompt ảnh không hợp lệ: ${match[1]}`);
+    if(imagePrompts.has(number))throw new Error(`STT prompt ảnh ${number} bị trùng.`);
+    imagePrompts.set(number,prompt);
+  }
+  return imagePrompts;
+}
+
 function updateBatchOptions(){
   const video = $('batchKind').value === 'video';
   $('batchReferenceField').style.display = video ? '' : 'none';
@@ -3001,14 +3367,14 @@ function updateBatchOptions(){
 
 function batchStatusLabel(status){
   return ({waiting:'Đang chờ lượt', submitting:'Đang gửi', queued:'Đã gửi · Chờ xử lý', stopped:'Đã bỏ qua',
-    unconfirmed:'Chưa xác nhận'})[status] || statusLabel(status);
+    unconfirmed:'Chưa xác nhận',image_ready:'Ảnh đã tạo · chờ duyệt video'})[status] || statusLabel(status);
 }
 
 function renderBatchSummary(batch){
   const jobs = batchHistory.flatMap(item => item.jobs);
   const count = status => jobs.filter(job => job.status === status && !job.recoveryQueued).length;
   const done = count('completed'), failed = count('failed'), skipped = count('stopped');
-  const uncertain = count('unconfirmed'), waiting = count('waiting');
+  const uncertain = count('unconfirmed'), waiting = count('waiting') + count('image_ready');
   const running = jobs.length - done - failed - skipped - uncertain - waiting;
   const saved = jobs.filter(job => job.saveState === 'saved').length;
   const saveFailed = jobs.filter(job => job.saveState === 'failed').length;
@@ -3079,7 +3445,6 @@ function cachedLocalPreview(batch, job){
 }
 
 function scheduleLocalBatchPreview(batch, job){
-  if (batch.kind === 'video') return;
   const directory = batchPreviewDirectory(batch);
   if (!directory || job.saveState !== 'saved' || !job.savedName) return;
   const cached = batchLocalPreviews.get(job.index);
@@ -3115,9 +3480,13 @@ async function loadLocalBatchPreview(batch, job, directory){
 }
 
 function batchPreviewHtml(batch, job){
-  if (batch.kind === 'video') return job.status === 'completed'
-    ? '<span class="badge ok">Video đã sẵn sàng để tải</span>'
-    : '<span class="hint">Chưa có video</span>';
+  if(batch.kind==='video'&&job.imageReferenceKey&&job.status!=='completed'){
+    hydrateBatchUploadPreview(job.imageReferenceKey);
+    const preview=batchUploadPreviews.get(job.imageReferenceKey);
+    return preview?`<img src="${esc(preview)}" alt="Ảnh tham chiếu STT ${batchDisplayNumber(job)}" title="${esc(job.imageReferenceName||'Ảnh upload')}">`:`<span class="hint">Ảnh upload: ${esc(job.imageReferenceName||'ảnh tham chiếu')}</span>`;
+  }
+  if (batch.kind === 'video' && job.imageFirst && job.imageUrl && job.status !== 'completed')
+    return `<img src="${esc(safeBatchMediaUrl(job.imageUrl))}" alt="Ảnh tham chiếu đã tạo" title="Ảnh tham chiếu đã tạo">`;
   const preview = cachedLocalPreview(batch, job);
   if (preview) {
     if (batch.kind === 'video')
@@ -3126,6 +3495,8 @@ function batchPreviewHtml(batch, job){
   }
   const directory = batchPreviewDirectory(batch);
   const cached = batchLocalPreviews.get(job.index);
+  if (batch.kind === 'video' && job.status === 'completed' && job.saveState !== 'saved')
+    return job.saveState === 'saving' ? '<span class="hint">Đang tải video về thư mục…</span>' : '<span class="badge ok">Video đã xong · bấm Tải xuống để xem local</span>';
   if (job.saveState === 'saving') return '<span class="hint">Đang lưu…</span>';
   if (job.saveState === 'saved' && job.savedName && directory) {
     if (cached && cached.failed && cached.directory === directory && cached.name === job.savedName)
@@ -3158,6 +3529,7 @@ function renderBatchJob(batch, job){
   const media = batchPreviewHtml(batch, job);
   const promptBody = job.editing
     ? `<textarea id="batch-prompt-edit-${job.index}" rows="4" oninput="rememberBatchPromptDraft(${job.index}, this.value)">${esc(job.draft != null ? job.draft : job.prompt)}</textarea>
+      ${job.imageFirst && !job.imageReferenceKey ? `<label class="hint" style="display:block;margin-top:6px">Prompt ảnh</label><textarea id="batch-image-prompt-edit-${job.index}" rows="4" oninput="rememberBatchImagePromptDraft(${job.index}, this.value)">${esc(job.imageDraft != null ? job.imageDraft : job.imagePrompt)}</textarea>` : ''}
       ${batch.kind === 'video' ? `<label class="hint" style="display:block;margin-top:6px">Ảnh tham chiếu cho lần tạo này (tùy chọn)
         <input type="file" accept="image/png,image/jpeg,image/webp" onchange="chooseBatchJobReference(${job.index}, this)" style="display:block;margin-top:4px">
       </label>${job.editReferenceName ? `<div class="hint">Ảnh đã chọn: ${esc(job.editReferenceName)}</div>` : ''}` : ''}
@@ -3169,11 +3541,14 @@ function renderBatchJob(batch, job){
       <details><summary>Xem prompt</summary>${esc(job.prompt)}</details>`;
   box.innerHTML = `<td class="mono">${String(batchDisplayNumber(job)).padStart(3,'0')}</td>
     <td class="batch-media">${media}</td>
+    <td class="batch-prompt">${esc(job.narration||'')}</td>
     <td class="batch-prompt">${promptBody}
+      ${job.imageReferenceName ? `<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>` : job.imageFirst ? `<div class="hint" style="margin-top:6px">Prompt ảnh cho STT ${esc(batchDisplayNumber(job))}: ${esc(job.imagePrompt)}</div>` : ''}
       ${job.savedName ? `<div class="mono" style="color:var(--ok);margin-top:5px">${job.saveState === 'saved' ? 'Đã lưu' : 'Tên file'}: ${esc(job.savedName)}</div>` : ''}
       ${job.id ? `<div class="mono">${esc(job.id)}</div>` : ''}
       ${job.accountLabel ? `<div class="mono">Tài khoản Muse: ${esc(job.accountLabel)}</div>` : ''}</td>
-    <td><span class="badge info">${batch.kind === 'video' ? ((batch.hasReference || job.referenceOverride) ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div>${job.referenceOverride ? `<div class="hint">Ảnh riêng: ${esc(job.referenceName || 'tham chiếu')}</div>` : (batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : '')}</td>
+    <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
+    <td><span class="badge info">${job.imageFirst ? (job.imageReady ? 'Ảnh đã tạo · chờ duyệt' : job.phase === 'video' ? 'Image → Video · đang tạo video' : 'Image → Video · đang tạo ảnh') : batch.kind === 'video' ? ((batch.hasReference || job.referenceOverride) ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span><div class="mono">${esc(batch.size)}${batch.kind === 'video' ? ` · ${esc(batch.duration)}s` : ''}</div>${job.referenceOverride ? `<div class="hint">Ảnh riêng: ${esc(job.referenceName || 'tham chiếu')}</div>` : (batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : '')}</td>
     <td class="mono">${job.createdAt ? fmtTime(job.createdAt) : '—'}<div>${job.elapsed ? esc(job.elapsed) + 's' : ''}</div>${job.attempt ? `<div>Lần tạo ${Number(job.attempt) + 1}</div>` : ''}</td>
     <td><span class="badge ${cls}">${esc(status)}</span>${['queued','processing'].includes(job.status) ? `<div class="mono">${progress}%</div>` : ''}
       ${job.error ? `<div class="batch-error">${esc(uiText(job.error))}</div>` : ''}
@@ -3186,6 +3561,8 @@ function renderBatchJob(batch, job){
       ${museUrl ? `<div class="muse-thread-line"><a class="muse-thread-url" href="${esc(museUrl)}" target="_blank" rel="noopener noreferrer">${esc(museUrl)}</a></div>` : (job.id && !missingThreadLink ? `<div style="margin-top:6px"><button class="ghost mini" onclick="checkBatchResult(${job.index})" ${job.checking ? 'disabled' : ''}>${job.checking ? 'Đang lấy link…' : 'Lấy lại link'}</button></div>` : '')}</td>
     <td class="batch-actions"><div class="acts">
       ${museUrl ? `<button type="button" class="ghost mini" onclick="copyBatchThreadLink(${job.index})">Copy link</button>` : ''}
+      ${job.imageFirst && job.imageReady && job.generatedReference ? `<button type="button" class="primary mini" onclick="approveBatchImageVideo(${job.index})" ${busy?'disabled':''}>Approve · Tạo video</button>` : ''}
+      ${job.imageReferenceKey ? `<button type="button" class="ghost mini" onclick="removeBatchImageReference(${job.index})" ${busy?'disabled':''}>Xóa ảnh tham chiếu</button>` : ''}
       ${canReconnect(job) ? `<button class="ghost mini" onclick="reconnectInterrupted(${job.index})" ${job.reconnecting ? 'disabled' : ''}>${job.reconnecting ? 'Đang nối lại…' : 'Nối lại'}</button>` : ''}
       ${batch.kind === 'video' && ['failed','unconfirmed'].includes(job.status) && !missingThreadLink && !has24HourVideoLimitError(job.error || job.reconnectNote) ? `<button class="ghost mini" onclick="recoverFailedVideos(${job.index})" ${busy || !job.id ? 'disabled' : ''} title="Lấy video từ cuộc trò chuyện cũ">${job.collecting ? 'Đang lấy video…' : 'Lấy lại video'}</button>` : batch.kind !== 'video' && canCollectRendered(job) ? `<button class="ghost mini" onclick="collectRenderedJob(${job.index})" ${busy ? 'disabled' : ''}>${job.collecting ? 'Đang lấy file…' : 'Lấy ảnh đã render'}</button><button class="ghost mini" onclick="copyBatchPrompt(${job.index})">Copy</button>` : ''}
       ${batch.kind === 'video' && job.collecting && job.recoveryQueued ? `<button type="button" class="ghost mini" onclick="cancelVideoRecovery(${job.index})" ${job.cancelCollecting ? 'disabled' : ''}>${job.cancelCollecting ? 'Đang hủy…' : 'Hủy lấy video'}</button>` : ''}
@@ -3205,18 +3582,65 @@ function renderBatchJob(batch, job){
 
 function batchEntries(){ return batchHistory.flatMap(batch => batch.jobs.map(job => ({batch,job}))); }
 function batchDisplayNumber(job){
+  if(Number.isSafeInteger(job.promptNumber) && job.promptNumber>0)return job.promptNumber;
   const index=batchEntries().findIndex(entry=>entry.job===job);
   return index<0 ? job.index+1 : index+1;
 }
+
+async function startBatchVideosFromImages(entries){
+  const eligible=entries.filter(({batch,job})=>batch.kind==='video'&&job.imageFirst&&job.imageReady&&(job.generatedReference||job.imageReferenceKey)
+    && !['completed','submitting','queued','processing','running'].includes(job.status));
+  if(!eligible.length)return toast('Chưa có ảnh nào đang chờ duyệt để tạo video.','warn');
+  const runner=activeBatch;
+  if(runner&&runner.running&&(runner.stop||runner.abandoned))return toast('Đợi luồng hiện tại dừng hẳn rồi mới gửi các video đã duyệt.','warn');
+  for(const {job} of eligible){
+    job.phase='video';job.imageReady=false;job.videoApproved=true;
+    job.status='waiting';job.progress=0;job.error='';job.id='';job.url='';
+  }
+  if(runner&&runner.running){
+    for(const entry of eligible){
+      const {batch,job}=entry;
+      job.runToken=runner.token;
+      if(!runner.jobs.includes(job))runner.jobs.push(job);
+      if(!runner.entries.some(item=>item.job===job))runner.entries.push(entry);
+      runner.retryQueue.push(entry);
+      if(!runner.owners.includes(batch))runner.owners.push(batch);
+      renderBatchJob(batch,job);
+    }
+    if(runner.setConcurrency)runner.setConcurrency(runner.concurrency);
+  }else{
+    eligible.forEach(({batch,job})=>renderBatchJob(batch,job));
+    await executeBatchEntries(eligible);
+  }
+  toast(`Đã duyệt ${eligible.length} ảnh; bắt đầu chạy prompt video.`,'ok');
+}
+
+async function approveBatchImageVideo(index){
+  const found=batchJobByIndex(index);
+  if(!found)return;
+  await startBatchVideosFromImages([found]);
+}
+
+async function runAllBatchVideosFromImages(){
+  await startBatchVideosFromImages(batchEntries());
+}
+
 function markBatchVideoCompleted(index){
   const batch = batchHistory.find(item => item.kind === 'video' && item.jobs.some(job => job.index === index));
   const job = batch && batch.jobs.find(item => item.index === index);
   if (!job || !safeBatchMediaUrl(job.url)) return;
+  // Stop both the active batch poller and restored-task recovery checks from
+  // replacing this manual completion with a stale server-side processing state.
+  job.manuallyCompleted = true;
+  job.runToken = 'manually-completed-' + Date.now();
+  job.executionToken = job.runToken;
   job.status = 'completed'; job.progress = 100; job.error = '';
   delete job.collecting; delete job.recoveryQueued; delete job.recoveryWaiting; delete job.preparing;
+  delete job.recovering; delete job.contextPending; delete job.interrupted; delete job.checking;
   persistBatchHistory(); renderBatchJob(batch, job);
 }
 function matchesBatchFilter(job, filter){
+  if(job.status==='image_ready')return filter==='all'||filter==='waiting';
   // Recovery temporarily moves failed rows into the active sending view.
   if (job.collecting) return filter === 'all' || filter === 'sending';
   if (job.recoveryWaiting) return filter === 'all' || filter === 'waiting' || filter === 'recovery';
@@ -3245,11 +3669,12 @@ function applyBatchFilter(){
     const visible = matchesBatchFilter(job,batchFilter) && (!query || `${batchDisplayNumber(job)} ${job.prompt}`.toLowerCase().includes(query));
     if (row) row.hidden = !visible;
   }
+  for(const job of batchDraftJobs){const row=$('batch-draft-'+job.index);if(row)row.hidden=!['all','waiting'].includes(batchFilter);}
   for (const [filter,id,label] of [['all','batchFilterAll','Tất cả'],['sending','batchFilterSending','Đang gửi'],['waiting','batchFilterWaiting','Đang chờ lượt'],['completed','batchFilterCompleted','Hoàn thành'],['failed','batchFilterFailed','Lỗi'],['recovery','batchFilterRecovery','Chờ lấy lại']]) {
-    $(id).textContent = `${label} (${entries.filter(({job})=>matchesBatchFilter(job,filter)).length})`;
+    $(id).textContent = `${label} (${entries.filter(({job})=>matchesBatchFilter(job,filter)).length + (filter==='all'||filter==='waiting'?batchDraftJobs.length:0)})`;
     $(id).classList.toggle('active',batchFilter === filter);
   }
-  if (!entries.length) $('batchResults').innerHTML = '<tr><td colspan="7" class="empty">Chưa có prompt. Nhập danh sách phía trên để bắt đầu.</td></tr>';
+  if (!entries.length&&!batchDraftJobs.length) $('batchResults').innerHTML = '<tr><td colspan="7" class="empty">Chưa có prompt. Thêm prompt ở phía trên.</td></tr>';
 }
 function batchSending(){
   return batchHistory.some(batch => batch.running && !batch.stop);
@@ -3270,6 +3695,7 @@ function updateBatchListControls(){
 function rebuildBatchTable(){
   $('batchResults').innerHTML = batchEntries().map(({job})=>`<tr id="batch-job-${job.index}"></tr>`).join('');
   for (const {batch,job} of batchEntries()) renderBatchJob(batch,job);
+  renderBatchDraftList();
   persistBatchHistory(); updateBatchStartLabel(); updateBatchListControls();
 }
 function deleteFinishedBatchJobs(){
@@ -3285,6 +3711,7 @@ function deleteFinishedBatchJobs(){
 function removeBatchJobRecord(index){
   const found = batchJobByIndex(index);
   if (found) {
+    deleteBatchDraftUpload(found.job.imageReferenceKey);
     found.job.deleted = true;
     found.job.runToken = 'deleted-' + Date.now();
   }
@@ -3337,6 +3764,7 @@ async function deleteBatchJob(index){
 function deleteAllBatchJobs(){
   updateBatchListControls(); if ($('batchDeleteAll').disabled) return;
   clearLocalBatchPreviews();
+  batchEntries().forEach(({job})=>deleteBatchDraftUpload(job.imageReferenceKey));
   batchHistory=[]; activeBatch=null; batchNextNumber=1; batchFilter='all'; $('batchSearch').value=''; $('batchPrompts').value='';
   saveBatchPromptDraft();
   $('batchSummary').textContent='Đã xóa toàn bộ danh sách; STT bắt đầu lại từ 1. Tệp đã lưu được giữ lại.';
@@ -3698,6 +4126,13 @@ function batchHasResumableJobs(runner){
   return !!runner && (runner.jobs || []).some(job=>['waiting','stopped','failed'].includes(job.status));
 }
 
+function updateBatchResumeButton(){
+  const runner=activeBatch;
+  $('batchResume').disabled=runner&&runner.running
+    ? !runner.paused
+    : !batchHistory.some(batch=>batch.jobs.some(job=>['waiting','stopped','failed'].includes(job.status)));
+}
+
 function pauseBatch(){
   const runner=activeBatch;
   if(!runner || !runner.running || runner.paused || runner.stop || runner.abandoned) return;
@@ -3709,9 +4144,10 @@ function pauseBatch(){
 }
 
 function resetBatchJobForResume(job, token){
-  const prompt=job.prompt, index=job.index, attempt=(job.attempt || 0)+1;
+  const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
+  const attempt=(job.attempt || 0)+1;
   Object.keys(job).forEach(key=>delete job[key]);
-  Object.assign(job,{prompt,index,attempt,status:'waiting',progress:0,
+  Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',progress:0,
     createdAt:Math.floor(Date.now()/1000),runToken:token});
 }
 
@@ -3753,8 +4189,9 @@ async function resumeBatch(){
 
 async function processBatchJob(batch, job, runner, accountId){
   delete job.sendQueued;
-  const endpoint = batch.kind === 'image' ? '/v1/images/tasks' : '/v1/videos';
-  const body = {prompt:job.prompt, size:batch.size, timeout:600};
+  const stage = job.imageFirst && job.phase !== 'video' ? 'image' : 'video';
+  const endpoint = stage === 'image' || batch.kind === 'image' ? '/v1/images/tasks' : '/v1/videos';
+  const body = {prompt:stage === 'image' && job.imageFirst ? job.imagePrompt : job.prompt, size:batch.size, timeout:600};
   const token = runner && runner.token;
   const executionToken = `${token}-${job.index}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   job.executionToken = executionToken;
@@ -3763,13 +4200,16 @@ async function processBatchJob(batch, job, runner, accountId){
   // one account can keep that account busy while other enabled accounts sit idle.
   if (batch.kind === 'video') body.duration = batch.duration;
   try {
-    if (batch.kind === 'video' && (batch.hasReference || job.referenceOverride)) {
+    if (batch.kind === 'video' && job.imageFirst && stage === 'video' && (job.generatedReference||job.imageReferenceKey)) {
+      body.reference_images=[await batchGeneratedImageData(job.imageReferenceKey?'idbref:'+job.imageReferenceKey:job.generatedReference)];
+    } else if (batch.kind === 'video' && (batch.hasReference || job.referenceOverride)) {
       const refs=await readBatchJobReference(batch,job);
       body.reference_images=Array.isArray(refs)?refs:[refs];
     }
   } catch(error) {
     job.status='failed';job.error='MUSE_ACTION_REQUIRED: '+error.message;
     renderBatchJob(batch,job);
+    await rerunBatchJobs('one', job.index, {force:true});
     return;
   }
   if (runner.stop || !alive()) return;
@@ -3779,7 +4219,7 @@ async function processBatchJob(batch, job, runner, accountId){
   // Retry only explicit queue rejection. An ambiguous submission must never create a duplicate.
   for (let attempt = 0; ; attempt++) {
     try {
-      const headers = batch.kind === 'image' ? {'Idempotency-Key':batch.id + '-' + job.index + '-' + (job.attempt || 0)} : {};
+      const headers = endpoint === '/v1/images/tasks' ? {'Idempotency-Key':batch.id + '-' + job.index + '-' + (job.attempt || 0) + '-' + stage} : {};
       result = await api(endpoint, {method:'POST', headers, body:JSON.stringify(body)});
       if (!alive()) {
         const staleTaskId = result.id || result.task_id;
@@ -3858,12 +4298,13 @@ async function processBatchJob(batch, job, runner, accountId){
         stopBatch(runner);
       }
       renderBatchJob(batch, job);
+      if (job.status === 'failed') await rerunBatchJobs('one', job.index, {force:true});
       return;
     }
   }
   job.id = result.id || result.task_id;
   job.error = '';
-  const deadline = Date.now() + 20 * 60 * 1000;
+  const deadline = Date.now() + (stage === 'video' ? 10 : 20) * 60 * 1000;
   let failures = 0;
   while (alive()) {
     rememberBatchAccount(job, result);
@@ -3873,9 +4314,26 @@ async function processBatchJob(batch, job, runner, accountId){
     if (['completed', 'succeeded'].includes(job.status)) {
       const media = (result.data && result.data[0]) || result.result || result.video || result;
       job.url = media.url || result.url || '';
+      if (stage === 'image' && job.imageFirst && safeBatchMediaUrl(job.url)) {
+        job.generatedReference=safeBatchMediaUrl(job.url);
+        job.imageUrl=job.generatedReference;
+        job.url='';
+        job.imageTaskId=job.id;
+        job.id='';
+        job.phase='approval';job.imageReady=true;
+        job.progress=100;job.status='image_ready';job.error='Ảnh đã tạo xong; hãy duyệt để gửi prompt video.';
+        renderBatchJob(batch,job);
+        loadMedia(); loadTasks();
+        return;
+      }
       job.status = safeBatchMediaUrl(job.url) ? 'completed' : 'failed';
       job.progress = 100;
-      if (job.status === 'failed') job.error = 'Tác vụ hoàn tất nhưng không có liên kết kết quả hợp lệ.';
+      if (job.status === 'failed') {
+        job.error = 'Tác vụ hoàn tất nhưng không có liên kết kết quả hợp lệ.';
+        renderBatchJob(batch, job);
+        await rerunBatchJobs('one', job.index, {force:true});
+        return;
+      }
       renderBatchJob(batch, job);
       if (job.status === 'completed' && batch.directory) queueBatchSave(runner, batch, job);
       loadMedia(); loadTasks();
@@ -3885,12 +4343,53 @@ async function processBatchJob(batch, job, runner, accountId){
       job.status = 'failed'; job.error = result.error || 'Tạo nội dung thất bại';
       renderBatchJob(batch, job);
       if (!alive()) return;
-      if (!String(job.error || '').includes('MUSE_ACTION_REQUIRED:') && await collectRenderedJob(job.index, {allowWhileRunning:true, keepError:true})) return;
+      job.reconnectNote = 'Tác vụ lỗi; đang gửi lại prompt tự động.';
+      renderBatchJob(batch, job);
+      await rerunBatchJobs('one', job.index, {force:true});
       return;
     }
-    if (!job.id || Date.now() >= deadline) {
+    if (!job.id) {
       job.status = 'unconfirmed';
-      job.error = job.id ? 'Đã chờ quá 20 phút. Kiểm tra lịch sử tác vụ; không gửi lại tự động.' : 'Máy chủ không trả về mã tác vụ. Kiểm tra lịch sử trước khi chạy lại.';
+      job.error = 'Máy chủ không trả về mã tác vụ. Kiểm tra lịch sử trước khi chạy lại.';
+      stopBatch(runner); renderBatchJob(batch, job);
+      return;
+    }
+    if (Date.now() >= deadline) {
+      if (stage === 'video') {
+        try {
+          const latest = await api(endpoint + '/' + encodeURIComponent(job.id));
+          if (!alive()) return;
+          if (['completed','succeeded','failed','cancelled'].includes(latest.status)) {
+            result = latest;
+            continue;
+          }
+          const cancelled = await cancelBatchServerTask(job.id);
+          if (!alive()) return;
+          if (cancelled.cancelled) {
+            job.status = 'failed';
+            job.error = 'Video đã chờ đủ 600 giây; đã đóng luồng cũ và đang tạo lại.';
+            job.reconnectNote = 'Tự tạo lại sau khi hết thời gian chờ.';
+            renderBatchJob(batch, job);
+            await rerunBatchJobs('one', job.index, {force:true});
+            return;
+          }
+          const afterCancel = await api(endpoint + '/' + encodeURIComponent(job.id));
+          if (!alive()) return;
+          if (['completed','succeeded','failed','cancelled'].includes(afterCancel.status)) {
+            result = afterCancel;
+            continue;
+          }
+          throw new Error('Máy chủ chưa xác nhận đã đóng luồng cũ.');
+        } catch (error) {
+          if (!alive()) return;
+          job.status = 'unconfirmed';
+          job.error = 'Đã chờ đủ 600 giây nhưng chưa xác nhận được trạng thái/hủy luồng cũ; không gửi trùng prompt. ' + error.message;
+          stopBatch(runner); renderBatchJob(batch, job);
+          return;
+        }
+      }
+      job.status = 'unconfirmed';
+      job.error = 'Đã chờ quá 20 phút. Kiểm tra lịch sử tác vụ; không gửi lại tự động.';
       stopBatch(runner); renderBatchJob(batch, job);
       return;
     }
@@ -3922,9 +4421,13 @@ async function processBatchJob(batch, job, runner, accountId){
 async function runBatch(){
   if (activeBatch && activeBatch.running) return;
   if (batchReferenceLoading) return toast('Đang đọc ảnh tham chiếu, hãy chờ một chút.','warn');
-  const prompts = splitBatchPrompts($('batchPrompts').value);
-  if (!prompts.length) return toast('Hãy nhập ít nhất một prompt, mỗi dòng một prompt.', 'warn');
+  const rows = batchDraftJobs.map(job=>({...job}));
+  const prompts = rows.map(row=>row.prompt);
+  if (!prompts.length) return toast('Hãy bấm “Thêm prompt video” để chuẩn bị danh sách trước khi Start.','warn');
   const kind = $('batchKind').value === 'video' ? 'video' : 'image';
+  if(kind!=='video' && rows.some(row=>row.imageFirst))return toast('Chọn loại nội dung Video cho các prompt ảnh tham chiếu.','warn');
+  const rowNumbers=new Set(rows.map(row=>row.promptNumber));
+  if(rowNumbers.size!==rows.length)return toast('STT prompt bị trùng. Hãy dùng mỗi số thứ tự một lần.','warn');
   const batch = {
     id:'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2),
     kind, size:$('batchSize').value, duration:Number($('batchDuration').value) || 10,
@@ -3932,8 +4435,8 @@ async function runBatch(){
     hasReference:kind==='video' && batchReferences.length>0,
     referenceImages:kind==='video' && batchReferences.length ? batchReferences.slice() : null,
     referenceName:kind==='video' ? batchReferences.map(ref=>ref.name).join(', ') : '',
-    jobs:prompts.map((prompt, offset) => ({prompt, index:batchNextNumber - 1 + offset, status:'waiting', progress:0, createdAt:Math.floor(Date.now()/1000)})),
-    stop:false, running:true, next:0, directory:batchDirectory,
+    jobs:rows.map((row, offset) => ({prompt:row.prompt, narration:row.narration||'', vietnamesePrompt:row.vietnamesePrompt||'', promptNumber:row.promptNumber, imageFirst:kind==='video' && !!row.imageFirst, imagePrompt:row.imagePrompt||'', imageReady:!!row.imageReady, imageReferenceKey:row.imageReferenceKey||'', imageReferenceName:row.imageReferenceName||'', index:batchNextNumber - 1 + offset, status:row.imageReady?'image_ready':'waiting', progress:row.imageReady?100:0, createdAt:Math.floor(Date.now()/1000)})),
+    stop:false, running:rows.some(row=>!row.imageReady), next:0, directory:batchDirectory,
     startedAt:Math.floor(Date.now()/1000), endedAt:null,
   };
   if (batch.hasReference) {
@@ -3943,7 +4446,11 @@ async function runBatch(){
     finally { batchReferenceLoading=false; }
   }
   batchNextNumber += prompts.length; batchHistory.push(batch);
-  await executeBatchEntries(batch.jobs.map(job=>({batch,job})));
+  batchDraftJobs=[];persistBatchDraft();renderBatchDraftList();
+  const runnable=batch.jobs.filter(job=>!job.imageReady).map(job=>({batch,job}));
+  rebuildBatchTable();
+  if(runnable.length)await executeBatchEntries(runnable);
+  else renderBatchSummary(batch);
 }
 
 function batchIsBusy(){
@@ -3957,9 +4464,10 @@ function batchJobByIndex(index){
 function moveBatchJobToUnsent(batch, job){
   const prompt = job.prompt;
   const index = job.index;
+  const {promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase} = job;
   const attempt = job.attempt;
   for (const key of Object.keys(job)) delete job[key];
-  Object.assign(job, {prompt, index, attempt, status:'stopped', progress:0, error:'Đã hủy tác vụ. Prompt được giữ trong danh sách để xếp hàng lại sau.'});
+  Object.assign(job, {prompt, index, promptNumber, imageFirst, imagePrompt, imageReady, imageReferenceKey, imageReferenceName, imageTaskId, generatedReference, imageUrl, phase, attempt, status:'stopped', progress:0, error:'Đã hủy tác vụ. Prompt được giữ trong danh sách để xếp hàng lại sau.'});
   renderBatchJob(batch, job);
 }
 
@@ -4004,7 +4512,14 @@ function batchPromptEditorValue(index, job){
   return job.draft != null ? job.draft : job.prompt;
 }
 
+function batchImagePromptEditorValue(index,job){
+  const field=document.getElementById('batch-image-prompt-edit-'+index);
+  return field&&field.parentNode?field.value:(job.imageDraft!=null?job.imageDraft:job.imagePrompt);
+}
+
 function startBatchPromptEdit(index){
+  const draft=batchDraftJobByIndex(index);
+  if(draft){draft.editing=true;draft.draft=draft.prompt;draft.imageDraft=draft.imagePrompt;renderBatchDraftList();return;}
   const found = batchJobByIndex(index);
   if (!found) return;
   found.job.editing = true;
@@ -4013,24 +4528,47 @@ function startBatchPromptEdit(index){
 }
 
 function rememberBatchPromptDraft(index, value){
+  const draft=batchDraftJobByIndex(index);
+  if(draft&&draft.editing){draft.draft=value;return;}
   const found = batchJobByIndex(index);
   if (found && found.job.editing) found.job.draft = value;
 }
 
+function rememberBatchImagePromptDraft(index,value){
+  const draft=batchDraftJobByIndex(index);
+  if(draft&&draft.editing){draft.imageDraft=value;return;}
+  const found=batchJobByIndex(index);
+  if(found&&found.job.editing)found.job.imageDraft=value;
+}
+
 function cancelBatchPromptEdit(index){
+  const draft=batchDraftJobByIndex(index);
+  if(draft){delete draft.editing;delete draft.draft;delete draft.imageDraft;renderBatchDraftList();return;}
   const found = batchJobByIndex(index);
   if (!found) return;
   delete found.job.editing;
   delete found.job.draft;
+  delete found.job.imageDraft;
   renderBatchJob(found.batch, found.job);
 }
 
 async function submitBatchPromptEdit(index){
+  const draft=batchDraftJobByIndex(index);
   const found = batchJobByIndex(index);
-  if (!found || !found.job.editing) return;
-  const text = String(batchPromptEditorValue(index, found.job) || '').trim();
+  const job=draft||found&&found.job;
+  if (!job || !job.editing) return;
+  const text = String(batchPromptEditorValue(index, job) || '').trim();
   if (!text) return toast('Prompt không được để trống.', 'warn');
-  const job = found.job;
+  const usesImagePrompt=job.imageFirst&&!job.imageReferenceKey;
+  const imageText=usesImagePrompt?String(batchImagePromptEditorValue(index,job)||'').trim():'';
+  if(usesImagePrompt&&!imageText)return toast('Prompt ảnh không được để trống.', 'warn');
+  if(draft){
+    const imageChanged=usesImagePrompt&&imageText!==job.imagePrompt;
+    job.prompt=text;if(usesImagePrompt)job.imagePrompt=imageText;
+    if(imageChanged){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+    delete job.editing;delete job.draft;delete job.imageDraft;
+    renderBatchDraftList();toast('Đã lưu prompt ảnh/video trong danh sách chờ.','ok');return;
+  }
   if (job.saveState === 'saving' || job.checking || job.collecting || job.reconnecting || job.recoveryQueued)
     return toast('Dòng này đang được lấy/lưu kết quả. Hãy thử lại khi thao tác xong.', 'warn');
   if (job.editReferenceImage) {
@@ -4047,9 +4585,13 @@ async function submitBatchPromptEdit(index){
   }
   delete job.editReferenceImage;
   delete job.editReferenceName;
+  const imageChanged=usesImagePrompt&&imageText!==job.imagePrompt;
+  if(usesImagePrompt)job.imagePrompt=imageText;
+  if(imageChanged){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
   job.prompt = text;
   delete job.editing;
   delete job.draft;
+  delete job.imageDraft;
   if (['submitting','queued','processing','running'].includes(job.status)) {
     await cancelAndRerunBatchJob(index, text);
     return;
@@ -4082,7 +4624,9 @@ function enqueueWaitingBatchRetry(batch, job, runner){
   job.deleted = true;
   job.runToken = 'superseded-' + Date.now();
   const replacement = {
-    prompt:job.prompt, index:job.index, attempt, status:'waiting', sendQueued:true,
+    prompt:job.prompt, index:job.index, promptNumber:job.promptNumber, imageFirst:job.imageFirst, imagePrompt:job.imagePrompt,
+    generatedReference:job.generatedReference, imageUrl:job.imageUrl, phase:job.phase,
+    attempt, status:'waiting', sendQueued:true,
     progress:0, createdAt:Math.floor(Date.now()/1000), runToken:runner ? runner.token : null
   };
   batch.jobs[position] = replacement;
@@ -4151,10 +4695,11 @@ async function rerunBatchJobs(mode, index, options){
         : mode === 'one' ? job.index === index : true));
     if (!entries.length) return toast('Không có prompt nào để đưa vào hàng chờ.', 'warn');
     for (const {batch,job} of entries) {
-      const prompt = job.prompt, index = job.index, attempt = (job.attempt || 0) + 1;
+      const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
+      const attempt = (job.attempt || 0) + 1;
       dropLocalBatchPreview(index);
       Object.keys(job).forEach(key=>delete job[key]);
-      Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:true,progress:0,
+      Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:true,progress:0,
         createdAt:Math.floor(Date.now()/1000),runToken:currentRunner.token});
       batch.directory = batchDirectory;
       if (!currentRunner.jobs.includes(job)) currentRunner.jobs.push(job);
@@ -4265,9 +4810,9 @@ async function rerunBatchJobs(mode, index, options){
       if (job.deleted) continue;
       dropLocalBatchPreview(job.index);
       const attempt=(job.attempt || 0)+1;
-      const {prompt,index}=job;
+      const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
       Object.keys(job).forEach(key=>delete job[key]);
-      Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:mode === 'failed',progress:0,createdAt:Math.floor(Date.now()/1000)});
+      Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:mode === 'failed',progress:0,createdAt:Math.floor(Date.now()/1000)});
       batch.directory=batchDirectory;
     }
     const remaining = pending.filter(({job}) => !job.deleted);
@@ -4294,9 +4839,9 @@ async function requeueFailedBatchJobs(){
   if (!entries.length) return;
   for (const {batch,job} of entries) {
     dropLocalBatchPreview(job.index);
-    const {prompt,index} = job, attempt = (job.attempt || 0) + 1;
+    const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase} = job, attempt = (job.attempt || 0) + 1;
     Object.keys(job).forEach(key => delete job[key]);
-    Object.assign(job,{prompt,index,attempt,status:'waiting',sendQueued:true,progress:0,createdAt:Math.floor(now/1000)});
+    Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:true,progress:0,createdAt:Math.floor(now/1000)});
     batch.directory = batchDirectory;
     if (runner) {
       job.runToken = runner.token;
@@ -4381,8 +4926,9 @@ async function executeBatchEntries(entries){
   runner.entries = entries;
   runner.owners = owners;
   owners.forEach(batch=>{batch.running=true;batch.stop=false;});
-  const controls=['batchStart','batchKind','batchSize','batchDuration','batchPrompts','batchUpdatePrompts','batchClearFolder','batchReferenceInput','batchReferenceClear'];
+  const controls=['batchStart','batchKind','batchSize','batchDuration','batchAddVideoPrompts','batchImagePrompts','batchAddImagePrompts','batchUpdateImagePrompts','batchImageUploadInput','batchAddUploadedImages','batchClearFolder','batchReferenceInput','batchReferenceClear'];
   controls.forEach(id=>{$(id).disabled=true;}); $('batchStop').disabled=false;
+  $('batchPrompts').disabled=false; $('batchUpdatePrompts').disabled=false;
   $('batchPause').disabled=false; $('batchResume').disabled=true;
   rebuildBatchTable();
   const concurrency = batchParallelLimit();
@@ -4469,9 +5015,9 @@ async function executeBatchEntries(entries){
           if (job.deleted) continue;
           if (runner.stop || runner.abandoned || job.runToken!==runner.token) break;
           dropLocalBatchPreview(job.index);
-          const {prompt,index}=job, attempt=(job.attempt || 0)+1;
+          const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job, attempt=(job.attempt || 0)+1;
           Object.keys(job).forEach(key=>delete job[key]);
-          Object.assign(job,{prompt,index,attempt,status:'waiting',progress:0,runToken:runner.token,createdAt:Math.floor(Date.now()/1000)});
+          Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',progress:0,runToken:runner.token,createdAt:Math.floor(Date.now()/1000)});
         }
       }
       if (!entry) break;
@@ -4562,6 +5108,9 @@ if (typeof document.addEventListener === 'function') {
 restoreBatchSettings();
 restoreBatchSetup();
 restoreBatchPromptDraft();
+restoreBatchNarrations();
+restoreBatchVietnamesePrompts();
+restoreBatchDraft();
 let imageVideoJobs = [];
 let imageVideoBusy = false;
 let imageVideoPauseRequested = false;
@@ -4618,7 +5167,7 @@ async function restoreImageVideoFlow(){
 }
 function renderImageVideoJobs(){
   const body=$('ivResults');
-  if(!imageVideoJobs.length){body.innerHTML='<tr><td colspan="6" class="empty">Chưa có prompt.</td></tr>';return;}
+  if(!imageVideoJobs.length){body.innerHTML='<tr><td colspan="7" class="empty">Chưa có prompt.</td></tr>';return;}
   body.innerHTML=imageVideoJobs.map((job,index)=>{
     const previewUrl=job.imageSource==='upload'?job.uploadPreviewUrl:job.imageUrl;
     const image=previewUrl ? `<a href="${esc(job.imageSource==='upload'?previewUrl:safeBatchMediaUrl(previewUrl))}" target="_blank" rel="noopener"><img src="${esc(job.imageSource==='upload'?previewUrl:safeBatchMediaUrl(previewUrl))}" alt="Ảnh ${index+1}" style="width:130px;height:90px;object-fit:contain;background:#060911;border-radius:8px"></a>${safeBatchMediaUrl(job.imageMuseUrl)?`<div><a href="${esc(safeBatchMediaUrl(job.imageMuseUrl))}" target="_blank" rel="noopener">Link ảnh Muse</a></div>`:''}` : '—';
@@ -4633,7 +5182,7 @@ function renderImageVideoJobs(){
     const videoThread=safeMuseThreadUrl(job.videoMuseThreadUrl);
     const imageAction=job.imageSource==='upload'?'':`<button class="ghost mini" onclick="retryImageVideoImage(${index})" ${imageVideoBusy||!job.imagePrompt.trim()?'disabled':''}>Tạo lại ảnh</button>`;
     const replaceUpload=job.imageSource==='upload'?`<button type="button" class="ghost mini" onclick="document.getElementById('iv-replace-image-${index}').click()" ${imageVideoBusy?'disabled':''}>Thay ảnh</button><input id="iv-replace-image-${index}" type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="replaceImageVideoUpload(${index},this)">`:'';
-    return `<tr><td class="mono">${String(index+1).padStart(3,'0')}</td><td>${image}<div class="hint">${esc(job.imageStatus||'Chưa tạo')}</div>${job.imageAccountLabel?`<div class="hint">Tài khoản: ${esc(job.imageAccountLabel)}</div>`:''}${imageThread?`<div><a href="${esc(imageThread)}" target="_blank" rel="noopener">Thread ảnh Muse</a></div>`:''}</td><td class="batch-prompt">${imagePrompt}</td><td class="batch-prompt">${videoPrompt}</td><td>${video}<div class="hint">${esc(job.videoStatus||'Chưa tạo')}</div>${job.videoAccountLabel?`<div class="hint">Tài khoản: ${esc(job.videoAccountLabel)}</div>`:''}${videoThread?`<div><a href="${esc(videoThread)}" target="_blank" rel="noopener">Thread video Muse</a></div>`:''}</td><td>${job.error?`<div class="batch-error">${esc(uiText(job.error))}</div>`:''}<div class="acts">${imageAction}<button class="ghost mini" onclick="retryImageVideoVideo(${index})" ${imageVideoBusy||job.imageStatus!=='Hoàn thành'||!job.videoPrompt.trim()?'disabled':''}>${job.videoStatus==='Hoàn thành'?'Tạo lại video':'Tạo video'}</button></div></td></tr>`;
+    return `<tr><td class="mono">${String(index+1).padStart(3,'0')}</td><td>${image}<div class="hint">${esc(job.imageStatus||'Chưa tạo')}</div>${job.imageAccountLabel?`<div class="hint">Tài khoản: ${esc(job.imageAccountLabel)}</div>`:''}${imageThread?`<div><a href="${esc(imageThread)}" target="_blank" rel="noopener">Thread ảnh Muse</a></div>`:''}</td><td class="batch-prompt">${imagePrompt}</td><td class="batch-prompt">${videoPrompt}</td><td>${video}<div class="hint">${esc(job.videoStatus||'Chưa tạo')}</div>${job.videoAccountLabel?`<div class="hint">Tài khoản: ${esc(job.videoAccountLabel)}</div>`:''}</td><td>${job.error?`<div class="batch-error">${esc(uiText(job.error))}</div>`:''}<div class="acts">${imageAction}<button class="ghost mini" onclick="retryImageVideoVideo(${index})" ${imageVideoBusy||job.imageStatus!=='Hoàn thành'||!job.videoPrompt.trim()?'disabled':''}>${job.videoStatus==='Hoàn thành'?'Tạo lại video':'Tạo video'}</button></div></td></tr>`;
   }).join('');
   const canCreateVideo=imageVideoJobs.some(job=>job.imageStatus==='Hoàn thành'&&job.videoPrompt.trim()&&job.videoStatus!=='Hoàn thành');
   $('ivCreateVideos').disabled=imageVideoBusy||!canCreateVideo;
