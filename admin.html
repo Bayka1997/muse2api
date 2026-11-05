@@ -210,6 +210,7 @@
   .batch-narration .narration-preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--text);margin-top:4px}
   .batch-narration[open] .narration-preview{display:none}
   .batch-narration .narration-full{white-space:pre-wrap;margin-top:6px}
+  .batch-prompt.prompt-needs-review, .batch-prompt.prompt-needs-review .hint, .batch-prompt.prompt-needs-review details, .batch-prompt.prompt-needs-review textarea{color:var(--bad)}
   .batch-prompt textarea{width:100%;min-width:220px;margin-top:0}
   #tab-batch .batch-table{min-width:1720px;table-layout:fixed}
   #tab-batch .batch-table th:nth-child(1),#tab-batch .batch-table td:nth-child(1){width:64px}
@@ -2385,8 +2386,8 @@ function renderBatchDraftRows(){
     <td class="mono">${String(job.promptNumber).padStart(3,'0')}</td>
     <td class="batch-media">${job.imageReferenceKey&&batchUploadPreviews.has(job.imageReferenceKey)?`<img src="${esc(batchUploadPreviews.get(job.imageReferenceKey))}" alt="Ảnh tham chiếu STT ${job.promptNumber}" title="${esc(job.imageReferenceName||'Ảnh upload')}">`:job.imageReferenceName?`<span class="hint">Ảnh upload: ${esc(job.imageReferenceName)}</span>`:'<span class="hint">Chưa chạy</span>'}</td>
     <td class="batch-prompt">${batchNarrationHtml(job.narration)}</td>
-    <td class="batch-prompt">${job.editing?`<label>Prompt video</label><textarea id="batch-prompt-edit-${job.index}" rows="3" oninput="rememberBatchPromptDraft(${job.index},this.value)">${esc(job.draft!=null?job.draft:job.prompt)}</textarea>${job.imageFirst&&!job.imageReferenceKey?`<label>Prompt ảnh</label><textarea id="batch-image-prompt-edit-${job.index}" rows="3" oninput="rememberBatchImagePromptDraft(${job.index},this.value)">${esc(job.imageDraft!=null?job.imageDraft:job.imagePrompt)}</textarea>`:''}<div class="acts"><button class="mini" onclick="submitBatchPromptEdit(${job.index})">Lưu sửa</button><button class="ghost mini" onclick="cancelBatchPromptEdit(${job.index})">Hủy</button></div>`:`<div class="prompt-text">${esc(job.prompt)}</div>${job.imageReferenceName?`<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>`:job.imageFirst?`<div class="hint" style="margin-top:6px">Prompt ảnh: ${esc(job.imagePrompt)}</div>`:''}`}</td>
-    <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
+    <td class="batch-prompt${job.needsPromptReview!==false?' prompt-needs-review':''}">${batchPromptReviewButton(job)}${job.editing?`<label>Prompt video</label><textarea id="batch-prompt-edit-${job.index}" rows="3" oninput="rememberBatchPromptDraft(${job.index},this.value)">${esc(job.draft!=null?job.draft:job.prompt)}</textarea>${job.imageFirst&&!job.imageReferenceKey?`<label>Prompt ảnh</label><textarea id="batch-image-prompt-edit-${job.index}" rows="3" oninput="rememberBatchImagePromptDraft(${job.index},this.value)">${esc(job.imageDraft!=null?job.imageDraft:job.imagePrompt)}</textarea>`:''}<div class="acts"><button class="mini" onclick="submitBatchPromptEdit(${job.index})">Lưu sửa</button><button class="ghost mini" onclick="cancelBatchPromptEdit(${job.index})">Hủy</button></div>`:`<div class="prompt-text">${esc(job.prompt)}</div>${job.imageReferenceName?`<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>`:job.imageFirst?`<div class="hint" style="margin-top:6px">Prompt ảnh: ${esc(job.imagePrompt)}</div>`:''}`}</td>
+    <td class="batch-prompt${job.needsPromptReview!==false?' prompt-needs-review':''}">${esc(job.vietnamesePrompt||'')}</td>
     <td><span class="badge info">${job.imageFirst?'Image → Video':'Text → Video'}</span></td>
     <td class="mono">—</td><td><span class="badge warn">${job.imageReady?'Ảnh sẵn · chờ Start':'Chờ Start'}</span></td>
     <td class="batch-actions"><div class="acts">${job.editing?'':`<button type="button" class="ghost mini" onclick="startBatchPromptEdit(${job.index})">Sửa prompt</button>`}${job.imageReferenceKey?`<button type="button" class="ghost mini" onclick="removeBatchImageReference(${job.index})">Xóa ảnh tham chiếu</button>`:''}<button type="button" class="danger mini" onclick="removeBatchDraftJob(${job.index})">Xóa khỏi danh sách chờ</button></div></td>
@@ -2426,8 +2427,8 @@ function addBatchVideoPrompts(){
   if(numbers.size!==rows.length)return toast('STT prompt video bị trùng. Hãy dùng mỗi STT một lần.','warn');
   for(const row of rows){
     const existing=batchDraftJobs.find(job=>job.promptNumber===row.promptNumber);
-    if(existing)existing.prompt=row.prompt;
-    else batchDraftJobs.push({prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:false,imagePrompt:''});
+    if(existing){if(existing.prompt!==row.prompt)existing.needsPromptReview=true;existing.prompt=row.prompt;}
+    else batchDraftJobs.push({needsPromptReview:true,prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:false,imagePrompt:''});
   }
   batchDraftJobs.sort((a,b)=>a.promptNumber-b.promptNumber);
   renderBatchDraftList();
@@ -2447,6 +2448,7 @@ function addBatchImagePrompts(){
     if(job.imageReferenceKey)continue;
     const nextPrompt=imagePrompts.get(job.promptNumber)||'';
     if(job.imagePrompt!==nextPrompt || job.imageFirst!==imagePrompts.has(job.promptNumber)){
+      job.needsPromptReview=true;
       delete job.generatedReference;delete job.imageUrl;delete job.phase;
       job.imageReady=false;
     }
@@ -2940,6 +2942,17 @@ function restoreBatchPromptDraft(){
     updateBatchStartLabel();
   } catch (error) { console.warn('Cannot restore prompt draft'); }
 }
+function batchPromptReviewButton(job){
+  return job.needsPromptReview!==false ? `<button type="button" class="ghost mini" onclick="confirmBatchPromptReview(${job.index})">Đã duyệt lại</button>` : '';
+}
+function confirmBatchPromptReview(index){
+  const draft=batchDraftJobByIndex(index);
+  if(draft){draft.needsPromptReview=false;renderBatchDraftList();return;}
+  const found=batchJobByIndex(index);
+  if(!found)return;
+  found.job.needsPromptReview=false;
+  persistBatchHistory();renderBatchJob(found.batch,found.job);
+}
 function updateBatchPromptList(){
   if (batchRestarting || batchRecoveringVideos)
     return toast('Hãy đợi thao tác khôi phục kết thúc trước khi cập nhật prompt.','warn');
@@ -2960,7 +2973,7 @@ function updateBatchPromptList(){
     if(new Set(rows.map(row=>row.promptNumber)).size!==rows.length)return toast('STT prompt video bị trùng.','warn');
     const missing=[...imageFirstNumbers.keys()].filter(number=>!rows.some(row=>row.promptNumber===number));
     if(missing.length)return toast(`Không có prompt video STT ${missing.join(', ')} để gắn prompt ảnh.`,'warn');
-    batchDraftJobs=rows.map(row=>{const old=staged.get(row.promptNumber);return {...old,prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:imageFirstNumbers.has(row.promptNumber)||!!(old&&old.imageFirst),imagePrompt:imageFirstNumbers.get(row.promptNumber)||(old&&old.imagePrompt)||''};});
+    batchDraftJobs=rows.map(row=>{const old=staged.get(row.promptNumber);return {...old,needsPromptReview:(old&&old.needsPromptReview!==false)||!old||old.prompt!==row.prompt||old.imagePrompt!==(imageFirstNumbers.get(row.promptNumber)||(old&&old.imagePrompt)||''),prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:imageFirstNumbers.has(row.promptNumber)||!!(old&&old.imageFirst),imagePrompt:imageFirstNumbers.get(row.promptNumber)||(old&&old.imagePrompt)||''};});
     renderBatchDraftList();toast(`Đã cập nhật danh sách chờ thành ${rows.length} prompt video.`,'ok');return;
   }
   if (batchEntries().some(({job})=>job.saveState==='saving'))
@@ -2976,11 +2989,12 @@ function updateBatchPromptList(){
   for(let i=0;i<Math.min(prompts.length,jobs.length);i++){
     const job=jobs[i];
     if (running && !['waiting','stopped'].includes(job.status)) continue;
+    if(job.prompt!==prompts[i])job.needsPromptReview=true;
     job.prompt=prompts[i];
     job.promptNumber=rows[i].promptNumber;
     const nextImageFirst=target.kind==='video' && (imageFirstNumbers.has(rows[i].promptNumber)||!!job.imageFirst);
     const nextImagePrompt=imageFirstNumbers.get(rows[i].promptNumber) || job.imagePrompt || '';
-    if(job.imageFirst!==nextImageFirst || job.imagePrompt!==nextImagePrompt){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+    if(job.imageFirst!==nextImageFirst || job.imagePrompt!==nextImagePrompt){job.needsPromptReview=true;delete job.generatedReference;delete job.imageUrl;delete job.phase;}
     job.imageFirst=nextImageFirst;
     job.imagePrompt=nextImagePrompt;
     if(['waiting','stopped'].includes(job.status)&&!job.id){job.status='waiting';job.progress=0;job.error='';}
@@ -2991,7 +3005,7 @@ function updateBatchPromptList(){
     batchHistory.forEach(batch=>batch.jobs=batch.jobs.filter(job=>!remove.has(job)));
   }else if(!running && prompts.length>jobs.length){
     for(const row of rows.slice(jobs.length))
-      target.jobs.push({prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:target.kind==='video' && imageFirstNumbers.has(row.promptNumber),imagePrompt:imageFirstNumbers.get(row.promptNumber)||'',index:batchNextNumber++,status:'waiting',progress:0,createdAt:Math.floor(Date.now()/1000)});
+      target.jobs.push({needsPromptReview:true,prompt:row.prompt,promptNumber:row.promptNumber,imageFirst:target.kind==='video' && imageFirstNumbers.has(row.promptNumber),imagePrompt:imageFirstNumbers.get(row.promptNumber)||'',index:batchNextNumber++,status:'waiting',progress:0,createdAt:Math.floor(Date.now()/1000)});
   }
   persistBatchHistory();rebuildBatchTable();
   updateBatchResumeButton();
@@ -3012,7 +3026,7 @@ function updateBatchImagePromptList(){
     for(const job of batchDraftJobs){
       if(job.imageReferenceKey)continue;
       const nextPrompt=imagePrompts.get(job.promptNumber)||'';
-      if(job.imagePrompt!==nextPrompt||job.imageFirst!==imagePrompts.has(job.promptNumber)){delete job.generatedReference;delete job.imageUrl;delete job.phase;job.imageReady=false;}
+      if(job.imagePrompt!==nextPrompt||job.imageFirst!==imagePrompts.has(job.promptNumber)){job.needsPromptReview=true;delete job.generatedReference;delete job.imageUrl;delete job.phase;job.imageReady=false;}
       job.imageFirst=imagePrompts.has(job.promptNumber);job.imagePrompt=nextPrompt;
     }
     renderBatchDraftList();toast(`Đã cập nhật ${imagePrompts.size} prompt ảnh trong danh sách chờ.`,'ok');return;
@@ -3040,7 +3054,7 @@ function updateBatchImagePromptList(){
     if(job.imageReferenceKey)continue;
     const nextImageFirst=batch.kind==='video'&&imagePrompts.has(number);
     const nextImagePrompt=imagePrompts.get(number)||'';
-    if(job.imageFirst!==nextImageFirst||job.imagePrompt!==nextImagePrompt){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+    if(job.imageFirst!==nextImageFirst||job.imagePrompt!==nextImagePrompt){job.needsPromptReview=true;delete job.generatedReference;delete job.imageUrl;delete job.phase;}
     if(job.imageFirst!==nextImageFirst)job.imageReady=false;
     job.imageFirst=nextImageFirst;
     job.imagePrompt=nextImagePrompt;
@@ -3535,12 +3549,12 @@ function renderBatchJob(batch, job){
   box.innerHTML = `<td class="mono">${String(batchDisplayNumber(job)).padStart(3,'0')}</td>
     <td class="batch-media">${media}</td>
     <td class="batch-prompt">${batchNarrationHtml(job.narration, narrationOpen)}</td>
-    <td class="batch-prompt">${promptBody}
+    <td class="batch-prompt${job.needsPromptReview!==false?' prompt-needs-review':''}">${batchPromptReviewButton(job)}${promptBody}
       ${job.imageReferenceName ? `<div class="hint" style="margin-top:6px">Ảnh tham chiếu upload: ${esc(job.imageReferenceName)}</div>` : job.imageFirst ? `<div class="hint" style="margin-top:6px">Prompt ảnh cho STT ${esc(batchDisplayNumber(job))}: ${esc(job.imagePrompt)}</div>` : ''}
       ${job.savedName ? `<div class="mono" style="color:var(--ok);margin-top:5px">${job.saveState === 'saved' ? 'Đã lưu' : 'Tên file'}: ${esc(job.savedName)}</div>` : ''}
       ${job.id ? `<div class="mono">${esc(job.id)}</div>` : ''}
       ${job.accountLabel ? `<div class="mono">Tài khoản Muse: ${esc(job.accountLabel)}</div>` : ''}</td>
-    <td class="batch-prompt">${esc(job.vietnamesePrompt||'')}</td>
+    <td class="batch-prompt${job.needsPromptReview!==false?' prompt-needs-review':''}">${esc(job.vietnamesePrompt||'')}</td>
     <td><span class="badge info">${job.imageFirst ? (job.imageReady ? 'Ảnh đã tạo · chờ duyệt' : job.phase === 'video' ? 'Image → Video · đang tạo video' : 'Image → Video · đang tạo ảnh') : batch.kind === 'video' ? ((batch.hasReference || job.referenceOverride) ? 'Image → Video' : 'Text → Video') : 'Text → Image'}</span>${job.referenceOverride ? `<div class="hint">Ảnh riêng: ${esc(job.referenceName || 'tham chiếu')}</div>` : (batch.hasReference ? `<div class="hint">Ảnh: ${esc(batch.referenceName)}</div>` : '')}</td>
     <td class="mono">${job.createdAt ? fmtTime(job.createdAt) : '—'}<div>${job.elapsed ? esc(job.elapsed) + 's' : ''}</div>${job.attempt ? `<div>Lần tạo ${Number(job.attempt) + 1}</div>` : ''}</td>
     <td><span class="badge ${cls}">${esc(status)}</span>${['queued','processing'].includes(job.status) ? `<div class="mono">${progress}%</div>` : ''}
@@ -4137,10 +4151,10 @@ function pauseBatch(){
 }
 
 function resetBatchJobForResume(job, token){
-  const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
+  const {narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
   const attempt=(job.attempt || 0)+1;
   Object.keys(job).forEach(key=>delete job[key]);
-  Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',progress:0,
+  Object.assign(job,{narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',progress:0,
     createdAt:Math.floor(Date.now()/1000),runToken:token});
 }
 
@@ -4427,7 +4441,7 @@ async function runBatch(){
     hasReference:kind==='video' && batchReferences.length>0,
     referenceImages:kind==='video' && batchReferences.length ? batchReferences.slice() : null,
     referenceName:kind==='video' ? batchReferences.map(ref=>ref.name).join(', ') : '',
-    jobs:rows.map((row, offset) => ({prompt:row.prompt, narration:row.narration||'', vietnamesePrompt:row.vietnamesePrompt||'', promptNumber:row.promptNumber, imageFirst:kind==='video' && !!row.imageFirst, imagePrompt:row.imagePrompt||'', imageReady:!!row.imageReady, imageReferenceKey:row.imageReferenceKey||'', imageReferenceName:row.imageReferenceName||'', index:batchNextNumber - 1 + offset, status:row.imageReady?'image_ready':'waiting', progress:row.imageReady?100:0, createdAt:Math.floor(Date.now()/1000)})),
+    jobs:rows.map((row, offset) => ({needsPromptReview:row.needsPromptReview!==false,prompt:row.prompt, narration:row.narration||'', vietnamesePrompt:row.vietnamesePrompt||'', promptNumber:row.promptNumber, imageFirst:kind==='video' && !!row.imageFirst, imagePrompt:row.imagePrompt||'', imageReady:!!row.imageReady, imageReferenceKey:row.imageReferenceKey||'', imageReferenceName:row.imageReferenceName||'', index:batchNextNumber - 1 + offset, status:row.imageReady?'image_ready':'waiting', progress:row.imageReady?100:0, createdAt:Math.floor(Date.now()/1000)})),
     stop:false, running:rows.some(row=>!row.imageReady), next:0, directory:batchDirectory,
     startedAt:Math.floor(Date.now()/1000), endedAt:null,
   };
@@ -4456,10 +4470,10 @@ function batchJobByIndex(index){
 function moveBatchJobToUnsent(batch, job){
   const prompt = job.prompt;
   const index = job.index;
-  const {promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase} = job;
+  const {narration,vietnamesePrompt,needsPromptReview,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase} = job;
   const attempt = job.attempt;
   for (const key of Object.keys(job)) delete job[key];
-  Object.assign(job, {prompt, index, promptNumber, imageFirst, imagePrompt, imageReady, imageReferenceKey, imageReferenceName, imageTaskId, generatedReference, imageUrl, phase, attempt, status:'stopped', progress:0, error:'Đã hủy tác vụ. Prompt được giữ trong danh sách để xếp hàng lại sau.'});
+  Object.assign(job, {narration,vietnamesePrompt,needsPromptReview,prompt, index, promptNumber, imageFirst, imagePrompt, imageReady, imageReferenceKey, imageReferenceName, imageTaskId, generatedReference, imageUrl, phase, attempt, status:'stopped', progress:0, error:'Đã hủy tác vụ. Prompt được giữ trong danh sách để xếp hàng lại sau.'});
   renderBatchJob(batch, job);
 }
 
@@ -4556,6 +4570,7 @@ async function submitBatchPromptEdit(index){
   if(usesImagePrompt&&!imageText)return toast('Prompt ảnh không được để trống.', 'warn');
   if(draft){
     const imageChanged=usesImagePrompt&&imageText!==job.imagePrompt;
+    if(job.prompt!==text||imageChanged)job.needsPromptReview=true;
     job.prompt=text;if(usesImagePrompt)job.imagePrompt=imageText;
     if(imageChanged){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
     delete job.editing;delete job.draft;delete job.imageDraft;
@@ -4580,6 +4595,7 @@ async function submitBatchPromptEdit(index){
   const imageChanged=usesImagePrompt&&imageText!==job.imagePrompt;
   if(usesImagePrompt)job.imagePrompt=imageText;
   if(imageChanged){delete job.generatedReference;delete job.imageUrl;delete job.phase;}
+  job.needsPromptReview=true;
   job.prompt = text;
   delete job.editing;
   delete job.draft;
@@ -4616,7 +4632,9 @@ function enqueueWaitingBatchRetry(batch, job, runner){
   job.deleted = true;
   job.runToken = 'superseded-' + Date.now();
   const replacement = {
-    prompt:job.prompt, index:job.index, promptNumber:job.promptNumber, imageFirst:job.imageFirst, imagePrompt:job.imagePrompt,
+    narration:job.narration, vietnamesePrompt:job.vietnamesePrompt,
+    imageReady:job.imageReady, imageReferenceKey:job.imageReferenceKey, imageReferenceName:job.imageReferenceName, imageTaskId:job.imageTaskId,
+    needsPromptReview:true, prompt:job.prompt, index:job.index, promptNumber:job.promptNumber, imageFirst:job.imageFirst, imagePrompt:job.imagePrompt,
     generatedReference:job.generatedReference, imageUrl:job.imageUrl, phase:job.phase,
     attempt, status:'waiting', sendQueued:true,
     progress:0, createdAt:Math.floor(Date.now()/1000), runToken:runner ? runner.token : null
@@ -4687,11 +4705,11 @@ async function rerunBatchJobs(mode, index, options){
         : mode === 'one' ? job.index === index : true));
     if (!entries.length) return toast('Không có prompt nào để đưa vào hàng chờ.', 'warn');
     for (const {batch,job} of entries) {
-      const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
+      const {narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
       const attempt = (job.attempt || 0) + 1;
       dropLocalBatchPreview(index);
       Object.keys(job).forEach(key=>delete job[key]);
-      Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:true,progress:0,
+      Object.assign(job,{narration,vietnamesePrompt,needsPromptReview:true,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:true,progress:0,
         createdAt:Math.floor(Date.now()/1000),runToken:currentRunner.token});
       batch.directory = batchDirectory;
       if (!currentRunner.jobs.includes(job)) currentRunner.jobs.push(job);
@@ -4802,9 +4820,9 @@ async function rerunBatchJobs(mode, index, options){
       if (job.deleted) continue;
       dropLocalBatchPreview(job.index);
       const attempt=(job.attempt || 0)+1;
-      const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
+      const {narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job;
       Object.keys(job).forEach(key=>delete job[key]);
-      Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:mode === 'failed',progress:0,createdAt:Math.floor(Date.now()/1000)});
+      Object.assign(job,{narration,vietnamesePrompt,needsPromptReview:true,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:mode === 'failed',progress:0,createdAt:Math.floor(Date.now()/1000)});
       batch.directory=batchDirectory;
     }
     const remaining = pending.filter(({job}) => !job.deleted);
@@ -4831,9 +4849,9 @@ async function requeueFailedBatchJobs(){
   if (!entries.length) return;
   for (const {batch,job} of entries) {
     dropLocalBatchPreview(job.index);
-    const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase} = job, attempt = (job.attempt || 0) + 1;
+    const {narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase} = job, attempt = (job.attempt || 0) + 1;
     Object.keys(job).forEach(key => delete job[key]);
-    Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:true,progress:0,createdAt:Math.floor(now/1000)});
+    Object.assign(job,{narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',sendQueued:true,progress:0,createdAt:Math.floor(now/1000)});
     batch.directory = batchDirectory;
     if (runner) {
       job.runToken = runner.token;
@@ -5007,9 +5025,9 @@ async function executeBatchEntries(entries){
           if (job.deleted) continue;
           if (runner.stop || runner.abandoned || job.runToken!==runner.token) break;
           dropLocalBatchPreview(job.index);
-          const {prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job, attempt=(job.attempt || 0)+1;
+          const {narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase}=job, attempt=(job.attempt || 0)+1;
           Object.keys(job).forEach(key=>delete job[key]);
-          Object.assign(job,{prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',progress:0,runToken:runner.token,createdAt:Math.floor(Date.now()/1000)});
+          Object.assign(job,{narration,vietnamesePrompt,needsPromptReview,prompt,index,promptNumber,imageFirst,imagePrompt,imageReady,imageReferenceKey,imageReferenceName,imageTaskId,generatedReference,imageUrl,phase,attempt,status:'waiting',progress:0,runToken:runner.token,createdAt:Math.floor(Date.now()/1000)});
         }
       }
       if (!entry) break;
